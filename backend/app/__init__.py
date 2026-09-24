@@ -1,0 +1,1 @@
+"""LanQuiz application package."""

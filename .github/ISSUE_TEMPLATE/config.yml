@@ -1,0 +1,5 @@
+# Prefer issues for bugs and clear feature requests.
+# Security-sensitive reports: see SECURITY.md
+
+blank_issues_enabled: true
+contact_links: []

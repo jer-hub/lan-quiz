@@ -1,0 +1,76 @@
+{
+  "title": "Friday Night Trivia",
+  "description": "A ready-to-play LanQuiz mix of science, movies, geography, and general knowledge.",
+  "questions": [
+    {
+      "text": "What is the chemical symbol for gold?",
+      "image": null,
+      "options": ["Au", "Ag", "Gd", "Go"],
+      "correct_indices": [0],
+      "time_limit": 15
+    },
+    {
+      "text": "Which planet is known as the Red Planet?",
+      "image": null,
+      "options": ["Venus", "Mars", "Jupiter", "Mercury"],
+      "correct_indices": [1],
+      "time_limit": 15
+    },
+    {
+      "text": "In which year did the first iPhone launch?",
+      "image": null,
+      "options": ["2005", "2007", "2009", "2010"],
+      "correct_indices": [1],
+      "time_limit": 20
+    },
+    {
+      "text": "What is the largest ocean on Earth?",
+      "image": null,
+      "options": ["Atlantic", "Indian", "Arctic", "Pacific"],
+      "correct_indices": [3],
+      "time_limit": 15
+    },
+    {
+      "text": "Who directed the movie Inception?",
+      "image": null,
+      "options": ["Steven Spielberg", "Christopher Nolan", "James Cameron", "Ridley Scott"],
+      "correct_indices": [1],
+      "time_limit": 20
+    },
+    {
+      "text": "How many sides does a hexagon have?",
+      "image": null,
+      "options": ["5", "6", "7", "8"],
+      "correct_indices": [1],
+      "time_limit": 10
+    },
+    {
+      "text": "Which of these are programming languages? (any correct option scores)",
+      "image": null,
+      "options": ["Python", "HTML", "JavaScript", "CSS"],
+      "correct_indices": [0, 2],
+      "time_limit": 20
+    },
+    {
+      "text": "What is the capital of Japan?",
+      "image": null,
+      "options": ["Osaka", "Kyoto", "Tokyo", "Nagoya"],
+      "correct_indices": [2],
+      "time_limit": 15
+    },
+    {
+      "text": "True or false: Water boils at 100°C at standard atmospheric pressure.",
+      "image": null,
+      "options": ["True", "False"],
+      "correct_indices": [0],
+      "time_limit": 10
+    },
+    {
+      "text": "Which animal is the largest mammal?",
+      "image": null,
+      "options": ["African elephant", "Blue whale", "Giraffe", "Hippopotamus"],
+      "correct_indices": [1],
+      "time_limit": 15
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "title": "LanQuiz Sample Trivia",
+  "description": "A short demo quiz to try LanQuiz on your LAN.",
+  "questions": [
+    {
+      "text": "What does LAN stand for?",
+      "image": null,
+      "options": [
+        "Local Area Network",
+        "Large Access Node",
+        "Linked Application Network",
+        "Low Amplitude Noise"
+      ],
+      "correct_indices": [0],
+      "time_limit": 20
+    },
+    {
+      "text": "Which protocol is commonly used for real-time quiz sockets in this app?",
+      "image": null,
+      "options": ["FTP", "WebSocket (Socket.IO)", "SMTP", "POP3"],
+      "correct_indices": [1],
+      "time_limit": 20
+    },
+    {
+      "text": "True or false: LanQuiz needs the internet during a live game.",
+      "image": null,
+      "options": ["True", "False"],
+      "correct_indices": [1],
+      "time_limit": 15
+    },
+    {
+      "text": "Which answers are primary colors in classic light theory? (select all that apply)",
+      "image": null,
+      "options": ["Red", "Green", "Blue", "Yellow"],
+      "correct_indices": [0, 2],
+      "time_limit": 25
+    }
+  ]
+}
