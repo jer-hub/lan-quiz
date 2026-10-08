@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.analysis import analyze_questions, load_history_questions
 from app.auth import require_teacher
 from app.config import settings
 from app.database import get_db
@@ -31,6 +32,8 @@ async def peek_pin(pin: str) -> dict[str, Any]:
         "status": session.status.value,
         "requires_student_code": session.requires_student_code,
         "player_count": session.player_count(),
+        "team_mode": session.team_mode,
+        "teams": list(session.teams),
     }
 
 
@@ -76,6 +79,26 @@ async def get_history(
     if not row:
         raise HTTPException(status_code=404, detail="History entry not found")
     return _history_out(row)
+
+
+@router.get("/history/{history_id}/analysis")
+async def history_analysis(
+    history_id: int,
+    teacher: User = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    result = await db.execute(
+        select(GameHistory).where(GameHistory.id == history_id, GameHistory.teacher_id == teacher.id)
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="History entry not found")
+    return {
+        "history_id": row.id,
+        "pin": row.pin,
+        "quiz_title": row.quiz_title,
+        "analysis": analyze_questions(load_history_questions(row)),
+    }
 
 
 @router.delete("/history/{history_id}", status_code=204)

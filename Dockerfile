@@ -28,6 +28,8 @@ RUN apt-get update \
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY backend/alembic.ini ./alembic.ini
+COPY backend/migrations ./migrations
 COPY backend/app ./app
 COPY --from=frontend-build /frontend/dist ./static
 

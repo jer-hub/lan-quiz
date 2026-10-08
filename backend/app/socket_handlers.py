@@ -14,8 +14,9 @@ from sqlalchemy.orm import selectinload
 from app.auth import decode_socket_token
 from app.config import settings
 from app.database import AsyncSessionLocal
-from app.game_manager import QuestionData, game_manager
+from app.game_manager import GameStatus, QuestionData, game_manager
 from app.models import Assignment, ClassRoom, GameHistory, GameResult, Quiz, Student
+from app.session_store import delete_snapshot, save_snapshot
 from app.utils.qr import generate_qr_data_url
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,9 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                     class_id=session.class_id,
                     assignment_id=session.assignment_id,
                     results_json=json.dumps(results, ensure_ascii=False),
+                    questions_json=json.dumps(
+                        getattr(session, "question_history", []), ensure_ascii=False
+                    ),
                     player_count=session.player_count(),
                 )
                 db.add(row)
@@ -79,6 +83,8 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
         payload = await game_manager.end_question(session)
         await sio.emit("question_ended", payload, room=session.pin)
         await game_manager.set_leaderboard_status(session)
+        await save_snapshot(session)
+        await game_manager.set_leaderboard_status(session)
         await sio.emit(
             "leaderboard_update",
             {
@@ -95,20 +101,46 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
             await finish_game(session)
             return
 
-        q_payload = {
-            "question_index": session.current_question_index,
-            "total_questions": len(session.questions),
-            "id": question.id,
-            "text": question.text,
-            "image": question.image,
-            "options": question.options,
-            "time_limit": question.time_limit,
-            "started_at": session.question_started_at,
-        }
-        await sio.emit("question_started", q_payload, room=session.pin)
+        # Host sees canonical order.
+        await sio.emit(
+            "question_started",
+            {
+                "question_index": session.current_question_index,
+                "total_questions": len(session.questions),
+                "id": question.id,
+                "text": question.text,
+                "image": question.image,
+                "options": question.options,
+                "time_limit": question.time_limit,
+                "started_at": session.question_started_at,
+                "kind": question.kind,
+            },
+            room=session.host_sid,
+        )
+        # Players each see their shuffled order (MC only).
+        for psid, p in session.players.items():
+            if p.is_host:
+                continue
+            shuffled, _ = session.shuffled_for(psid, question)
+            await sio.emit(
+                "question_started",
+                {
+                    "question_index": session.current_question_index,
+                    "total_questions": len(session.questions),
+                    "id": question.id,
+                    "text": question.text,
+                    "image": question.image,
+                    "options": shuffled,
+                    "time_limit": question.time_limit,
+                    "started_at": session.question_started_at,
+                    "kind": question.kind,
+                },
+                to=psid,
+            )
 
         task = asyncio.create_task(run_question_timer(session.pin, question.time_limit))
         session.question_task = task
+        await save_snapshot(session)
 
     async def finish_game(session: Any) -> None:
         ranking = session.leaderboard()
@@ -119,10 +151,14 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                 "quiz_title": session.quiz_title,
                 "leaderboard": ranking,
                 "podium": ranking[:3],
+                "team_scores": session.team_scores() if session.team_mode else [],
+                "team_mode": session.team_mode,
             },
             room=session.pin,
         )
         await save_history(session)
+        await delete_snapshot(session.pin)
+        await game_manager.cleanup_game(session.pin)
 
     @sio.event
     async def connect(sid: str, environ: dict, auth: Any = None) -> None:
@@ -131,10 +167,11 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
     @sio.event
     async def disconnect(sid: str) -> None:
         logger.info("Client disconnected sid=%s", sid)
-        session = await game_manager.leave_game(sid)
+        session = await game_manager.mark_disconnected(sid)
         if session:
             await broadcast_lobby(session)
             await sio.emit("player_left", {"sid": sid}, room=session.pin)
+            await save_snapshot(session)
 
     @sio.event
     async def create_game(sid: str, data: dict) -> None:
@@ -216,9 +253,11 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                     id=q.id,
                     text=q.text,
                     image=q.image,
-                    options=json.loads(q.options_json),
-                    correct_indices=json.loads(q.correct_indices_json),
+                    options=json.loads(q.options_json or "[]"),
+                    correct_indices=json.loads(q.correct_indices_json or "[]"),
                     time_limit=q.time_limit,
+                    kind=q.kind or "mc",
+                    answer_text=q.answer_text,
                 )
                 for q in quiz.questions
             ]
@@ -226,6 +265,9 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
             quiz_pk = quiz.id
             teacher_id = principal.user_id
             asg_id = assignment.id if assignment else None
+            team_mode = bool((data or {}).get("team_mode", False))
+            teams_raw = (data or {}).get("teams") or []
+            teams = [str(t).strip()[:24] for t in teams_raw if str(t).strip()][:8]
 
         try:
             session = await game_manager.create_game(
@@ -236,6 +278,8 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                 teacher_id=teacher_id,
                 class_id=class_id,
                 assignment_id=asg_id,
+                team_mode=team_mode,
+                teams=teams,
             )
         except Exception as exc:
             await emit_error(sid, str(exc))
@@ -244,6 +288,7 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
         await sio.enter_room(sid, session.pin)
         join_url = f"{settings.public_base_url}/play?pin={session.pin}"
         qr = generate_qr_data_url(join_url)
+        await save_snapshot(session)
         await sio.emit(
             "game_created",
             {
@@ -252,6 +297,43 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                 "qr": qr,
                 "quiz_title": session.quiz_title,
                 "question_count": len(session.questions),
+                "restored": False,
+                **game_manager.lobby_payload(session),
+            },
+            to=sid,
+        )
+        await broadcast_lobby(session)
+
+    @sio.event
+    async def reclaim_game(sid: str, data: dict) -> None:
+        """Host reclaims a restored lobby after restart/refresh."""
+        token = (data or {}).get("token")
+        pin = str((data or {}).get("pin", "")).strip().upper()
+        principal = decode_socket_token(token)
+        if not principal or principal.role != "teacher" or not principal.user_id:
+            await emit_error(sid, "Teachers must be logged in to reclaim a game.")
+            return
+        if not pin:
+            await emit_error(sid, "Missing PIN.")
+            return
+        try:
+            session = await game_manager.reclaim_host(pin, sid, principal.user_id)
+        except ValueError as exc:
+            await emit_error(sid, str(exc))
+            return
+        await sio.enter_room(sid, session.pin)
+        join_url = f"{settings.public_base_url}/play?pin={session.pin}"
+        qr = generate_qr_data_url(join_url)
+        await save_snapshot(session)
+        await sio.emit(
+            "game_created",
+            {
+                "pin": session.pin,
+                "join_url": join_url,
+                "qr": qr,
+                "quiz_title": session.quiz_title,
+                "question_count": len(session.questions),
+                "restored": True,
                 **game_manager.lobby_payload(session),
             },
             to=sid,
@@ -263,6 +345,8 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
         pin = str(data.get("pin", "")).strip().upper()
         nickname = str(data.get("nickname", "")).strip()
         student_code = str(data.get("student_code", "")).strip().upper()
+        rejoin_sid = str(data.get("rejoin_sid", "") or "").strip() or None
+        team = str(data.get("team", "") or "").strip() or None
 
         session_peek = game_manager.get_by_pin(pin)
         student_id = None
@@ -319,16 +403,19 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                 resolved_nick,
                 student_id=student_id,
                 student_code=student_code or None,
+                rejoin_sid=rejoin_sid,
+                team=team,
             )
         except ValueError as exc:
             await emit_error(sid, str(exc))
             return
 
         await sio.enter_room(sid, session.pin)
+        await save_snapshot(session)
         player = session.players[sid]
         await sio.emit(
             "player_joined",
-            {"sid": sid, "nickname": player.nickname, "student_id": player.student_id},
+            {"sid": sid, "nickname": player.nickname, "student_id": player.student_id, "team": player.team},
             room=session.pin,
         )
         await sio.emit(
@@ -338,6 +425,7 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                 "nickname": player.nickname,
                 "sid": sid,
                 "student_id": player.student_id,
+                "team": player.team,
                 **game_manager.lobby_payload(session),
             },
             to=sid,
@@ -354,6 +442,7 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
         if session:
             await sio.emit("player_left", {"sid": sid}, room=session.pin)
             await broadcast_lobby(session)
+            await save_snapshot(session)
 
     @sio.event
     async def kick_player(sid: str, data: dict) -> None:
@@ -370,6 +459,7 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
         await sio.leave_room(target, session.pin)
         await sio.emit("player_left", {"sid": target}, room=session.pin)
         await broadcast_lobby(session)
+        await save_snapshot(session)
 
     @sio.event
     async def start_game(sid: str, data: dict | None = None) -> None:
@@ -417,13 +507,19 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
 
     @sio.event
     async def submit_answer(sid: str, data: dict) -> None:
+        raw_idx = (data or {}).get("option_index")
+        raw_text = (data or {}).get("answer_text")
+        option_index: int | None = None
+        if raw_idx is not None:
+            try:
+                option_index = int(raw_idx)
+            except (TypeError, ValueError):
+                await emit_error(sid, "Invalid option_index")
+                return
         try:
-            option_index = int(data.get("option_index"))
-        except (TypeError, ValueError):
-            await emit_error(sid, "Invalid option_index")
-            return
-        try:
-            session, record, all_answered = await game_manager.submit_answer(sid, option_index)
+            session, record, all_answered = await game_manager.submit_answer(
+                sid, option_index, str(raw_text) if raw_text is not None else None
+            )
         except ValueError as exc:
             await emit_error(sid, str(exc))
             return

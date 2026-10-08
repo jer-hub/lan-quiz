@@ -2,6 +2,14 @@
 
 How teachers and students use LanQuiz day to day.
 
+## LAN checklist (5 lines)
+
+1. Same Wi-Fi for host PC + student phones.
+2. Host sets `HOST_IP` to its LAN IP (`ipconfig` on Windows, e.g. `192.168.1.42`) — QR uses it.
+3. Allow TCP 8000 when the firewall prompts.
+4. Test: scan QR → `/play?pin=XXXX` opens with the PIN prefilled.
+5. If QR shows `localhost`, fix `HOST_IP` and restart (the host lobby warns you).
+
 ## Roles
 
 | Role | How they sign in | What they do |
@@ -43,11 +51,12 @@ Lifecycle:
 ### Student flow
 
 1. Log in → dashboard lists assignments (due, overdue, not played / score, play count).
-2. When the teacher is hosting, the card shows **Live now — PIN** and a Join link.
-3. Open `/play`, enter PIN + **student code** (nickname is taken from the roster).
-4. Answer during the live round. Scores appear under **My scores** and in the gradebook.
+2. Live: when the teacher is hosting, the card shows **Live now — PIN** and a Join link.
+3. Homework: open assignments carry a **homework** badge — **Start homework** plays solo (no host), scored flat `SCORE_BASE` per correct answer.
+4. Open `/play`, enter PIN + **student code** for live rounds (nickname is taken from the roster).
 
-Students **cannot** start an assignment quiz by themselves. That would require a future self-paced mode.
+Students can start **homework** assignments by themselves (async attempts count toward
+`max_attempts` and gradebook `best`/`latest`). Live PIN games still need a host.
 
 ### Rules
 

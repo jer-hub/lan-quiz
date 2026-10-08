@@ -14,6 +14,7 @@ services:
       SCORE_BASE: "${SCORE_BASE:-1000}"
       JWT_SECRET: "${JWT_SECRET:-change-me-lanquiz-dev-secret}"
       JWT_EXPIRE_HOURS: "${JWT_EXPIRE_HOURS:-72}"
+      ALLOW_DEFAULT_SECRET: "${ALLOW_DEFAULT_SECRET:-false}"
     volumes:
       - ./data:/app/data
     restart: unless-stopped

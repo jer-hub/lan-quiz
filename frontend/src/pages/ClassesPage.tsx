@@ -73,6 +73,11 @@ export default function ClassesPage() {
         {!classes.length && (
           <li className="rounded-2xl border-2 border-dashed border-sky-200 px-4 py-10 text-center text-ink/50">
             No classes yet
+            <ol className="mx-auto mt-4 max-w-md space-y-1 text-left text-sm font-semibold text-ink/70">
+              <li>1. Create a class below</li>
+              <li>2. Open it → add students or import the CSV template</li>
+              <li>3. Go to Assignments → assign a quiz → host live or homework</li>
+            </ol>
           </li>
         )}
       </ul>

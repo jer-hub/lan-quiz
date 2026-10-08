@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { GameHistory } from "../shared";
+import type { GameHistory, QuestionAnalysis } from "../shared";
 
 export default function HistoryPage() {
   const [rows, setRows] = useState<GameHistory[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [analysis, setAnalysis] = useState<Record<number, QuestionAnalysis[]>>({});
 
   const load = async () => {
     try {
@@ -23,6 +24,38 @@ export default function HistoryPage() {
     if (!confirm("Delete this history entry?")) return;
     await api.deleteHistory(id);
     await load();
+  };
+
+  const toggle = async (id: number) => {
+    if (openId === id) {
+      setOpenId(null);
+      return;
+    }
+    setOpenId(id);
+    if (!analysis[id]) {
+      try {
+        const res = await api.historyAnalysis(id);
+        setAnalysis((p) => ({ ...p, [id]: res.analysis }));
+      } catch {
+        /* leaderboard still shows */
+      }
+    }
+  };
+
+  const downloadAnalysis = (row: GameHistory) => {
+    const a = analysis[row.id] || [];
+    const lines = ["question_index,text,pct_correct,correct,total"];
+    for (const q of a) {
+      const text = `"${(q.text || "").replace(/"/g, '""')}"`;
+      lines.push(`${q.question_index},${text},${q.pct_correct},${q.correct},${q.total}`);
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const el = document.createElement("a");
+    el.href = url;
+    el.download = `analysis-${row.pin}-${row.id}.csv`;
+    el.click();
+    URL.revokeObjectURL(url);
   };
 
   const onExport = (row: GameHistory) => {
@@ -55,7 +88,7 @@ export default function HistoryPage() {
                 <button
                   type="button"
                   className="rounded-lg bg-sky-100 px-3 py-1.5 text-sm font-bold"
-                  onClick={() => setOpenId(openId === row.id ? null : row.id)}
+                  onClick={() => void toggle(row.id)}
                 >
                   {openId === row.id ? "Hide" : "Results"}
                 </button>
@@ -68,6 +101,13 @@ export default function HistoryPage() {
                 </button>
                 <button
                   type="button"
+                  className="rounded-lg bg-sky-100 px-3 py-1.5 text-sm font-bold"
+                  onClick={() => downloadAnalysis(row)}
+                >
+                  Analysis CSV
+                </button>
+                <button
+                  type="button"
                   className="rounded-lg bg-red-50 px-3 py-1.5 text-sm font-bold text-danger"
                   onClick={() => void onDelete(row.id)}
                 >
@@ -76,16 +116,44 @@ export default function HistoryPage() {
               </div>
             </div>
             {openId === row.id && (
-              <ol className="mt-4 space-y-1 border-t border-sky-100 pt-3">
-                {row.results.map((r) => (
-                  <li key={r.sid} className="flex justify-between text-sm font-semibold">
-                    <span>
-                      #{r.rank} {r.nickname}
-                    </span>
-                    <span>{r.score}</span>
-                  </li>
-                ))}
-              </ol>
+              <>
+                <ol className="mt-4 space-y-1 border-t border-sky-100 pt-3">
+                  {row.results.map((r) => (
+                    <li key={r.sid} className="flex justify-between text-sm font-semibold">
+                      <span>
+                        #{r.rank} {r.nickname}
+                      </span>
+                      <span>{r.score}</span>
+                    </li>
+                  ))}
+                </ol>
+                {(analysis[row.id] || []).length > 0 && (
+                  <div className="mt-4 overflow-x-auto rounded-xl border border-sky-100">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-sky-50">
+                        <tr>
+                          <th className="px-3 py-2">Q#</th>
+                          <th className="px-3 py-2">Question</th>
+                          <th className="px-3 py-2">% correct</th>
+                          <th className="px-3 py-2">Answers</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analysis[row.id].map((q) => (
+                          <tr key={q.question_index} className="border-t border-sky-100">
+                            <td className="px-3 py-2 font-bold">Q{q.question_index + 1}</td>
+                            <td className="max-w-[240px] truncate px-3 py-2">{q.text}</td>
+                            <td className="px-3 py-2 font-bold">{q.pct_correct}%</td>
+                            <td className="px-3 py-2 text-ink/60">
+                              {q.correct}/{q.total}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
             )}
           </li>
         ))}

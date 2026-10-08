@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { useSocket, useSocketEvent } from "../hooks/useSocket";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useSocket, useSocketEvent, loadHostSession, saveHostSession, clearHostSession } from "../hooks/useSocket";
 import { useAuth } from "../hooks/useAuth";
+import { api } from "../api";
 import type {
   GameEndedPayload,
   LeaderboardEntry,
@@ -17,6 +18,7 @@ type Phase = "connecting" | "lobby" | "question" | "reveal" | "finished" | "erro
 
 export default function HostGame() {
   const { quizId, assignmentId } = useParams();
+  const [searchParams] = useSearchParams();
   const { socket, connected } = useSocket();
   const { token } = useAuth();
   const createdRef = useRef(false);
@@ -33,17 +35,53 @@ export default function HostGame() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [answerCount, setAnswerCount] = useState(0);
   const [final, setFinal] = useState<GameEndedPayload | null>(null);
+  const [restored, setRestored] = useState(false);
+  const [loopback, setLoopback] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    void api
+      .health()
+      .then((h) => setLoopback(!!h.host_ip_is_loopback))
+      .catch(() => undefined);
+  }, []);
+
+  const copyJoinUrl = useCallback(() => {
+    if (!joinUrl) return;
+    void (async () => {
+      try {
+        await navigator.clipboard.writeText(joinUrl);
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 2000);
+      } catch {
+        /* clipboard unavailable */
+      }
+    })();
+  }, [joinUrl]);
 
   useEffect(() => {
     if (!connected || createdRef.current || !token) return;
     if (!quizId && !assignmentId) return;
     createdRef.current = true;
+    // If we have a stored PIN from a previous create (refresh/restart), reclaim it.
+    const stored = loadHostSession();
+    if (stored?.pin) {
+      socket.emit("reclaim_game", { pin: stored.pin, token });
+      return;
+    }
+    const teamsParam = (searchParams.get("teams") || "")
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .slice(0, 8);
+    const teamPayload =
+      teamsParam.length >= 2 ? { team_mode: true, teams: teamsParam } : {};
     if (assignmentId) {
       socket.emit("create_game", { assignment_id: Number(assignmentId), token });
     } else {
-      socket.emit("create_game", { quiz_id: Number(quizId), token });
+      socket.emit("create_game", { quiz_id: Number(quizId), token, ...teamPayload });
     }
-  }, [connected, quizId, assignmentId, socket, token]);
+  }, [connected, quizId, assignmentId, socket, token, searchParams]);
 
   // Surface a stuck-connecting state if the socket never comes up
   useEffect(() => {
@@ -66,13 +104,15 @@ export default function HostGame() {
 
   useSocketEvent(
     "game_created",
-    (data: LobbyState & { qr: string; join_url: string; quiz_title: string }) => {
+    (data: LobbyState & { qr: string; join_url: string; quiz_title: string; restored?: boolean }) => {
       setPin(data.pin);
       setQr(data.qr);
       setJoinUrl(data.join_url);
       setQuizTitle(data.quiz_title);
       setLobby(data);
       setPhase("lobby");
+      setRestored(!!data.restored);
+      saveHostSession({ pin: data.pin });
     },
   );
 
@@ -112,6 +152,7 @@ export default function HostGame() {
     setFinal(data);
     setLeaderboard(data.leaderboard);
     setPhase("finished");
+    clearHostSession();
   });
 
   const start = useCallback(() => socket.emit("start_game"), [socket]);
@@ -142,6 +183,21 @@ export default function HostGame() {
       <div className="mx-auto max-w-4xl px-4 py-10">
         <h1 className="text-center font-display text-4xl sm:text-5xl">Final results</h1>
         <p className="mt-2 text-center text-lg text-ink/70">{final.quiz_title}</p>
+        {final.team_scores && final.team_scores.length > 0 && (
+          <div className="mx-auto mt-6 max-w-md rounded-2xl border border-sky-200 bg-white p-4">
+            <h2 className="text-center font-display text-2xl">Team standings</h2>
+            <ul className="mt-2 space-y-1">
+              {final.team_scores.map((t) => (
+                <li key={t.team} className="flex justify-between font-bold">
+                  <span>
+                    #{t.rank} {t.team}
+                  </span>
+                  <span>{t.score} pts</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="mt-8">
           <Podium podium={final.podium} />
         </div>
@@ -166,14 +222,33 @@ export default function HostGame() {
       {phase === "lobby" && (
         <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
           <div className="rounded-3xl bg-gradient-to-br from-sky-600 to-cyan-500 p-8 text-white shadow-xl">
+            {restored && (
+              <p className="mb-3 inline-block rounded-full bg-white/20 px-3 py-1 text-sm font-bold" role="status">
+                Restored session PIN {pin} — players rejoin with the same PIN
+              </p>
+            )}
+            {loopback && (
+              <p className="mb-3 rounded-2xl bg-amber-300/90 px-4 py-2 text-sm font-bold text-amber-950" role="alert">
+                Students can&apos;t join via localhost — set HOST_IP to your LAN IP (run
+                ipconfig, e.g. 192.168.1.42) and restart.
+              </p>
+            )}
             <p className="text-lg font-semibold text-sky-100">Join at</p>
             <p className="mt-1 break-all font-mono text-xl sm:text-2xl">{joinUrl || "…"}</p>
+            <button
+              type="button"
+              onClick={copyJoinUrl}
+              className="mt-2 rounded-xl bg-white/20 px-3 py-1.5 text-sm font-bold backdrop-blur hover:bg-white/30"
+            >
+              {copied ? "Copied!" : "Copy join link"}
+            </button>
             <p className="mt-8 text-sky-100">Game PIN</p>
             <p className="font-display text-6xl tracking-[0.2em] sm:text-8xl">{pin}</p>
             <p className="mt-4 text-xl font-semibold">{quizTitle}</p>
             <p className="mt-1 text-sky-100">
-              {lobby?.player_count ?? 0} player{(lobby?.player_count ?? 0) === 1 ? "" : "s"} waiting
+              {lobby?.player_count ?? 0}/100 players waiting
               {lobby?.requires_student_code ? " · roster codes required" : ""}
+              {lobby?.team_mode ? ` · teams: ${(lobby?.teams || []).join(", ")}` : ""}
             </p>
             <button
               type="button"
@@ -199,7 +274,10 @@ export default function HostGame() {
                   key={p.sid}
                   className="flex items-center justify-between rounded-xl bg-sky-50 px-3 py-2"
                 >
-                  <span className="font-bold">{p.nickname}</span>
+                  <span className="font-bold">
+                    {p.nickname}
+                    {p.team ? <span className="ml-2 text-xs text-ink/60">[{p.team}]</span> : null}
+                  </span>
                   <button
                     type="button"
                     onClick={() => kick(p.sid)}

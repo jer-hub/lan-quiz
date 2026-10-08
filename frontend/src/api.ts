@@ -5,6 +5,8 @@ import type {
   Assignment,
   AssignmentLive,
   AssignmentResults,
+  AttemptDetail,
+  AttemptSubmitResult,
   AuthResponse,
   ClassOut,
   GameHistory,
@@ -12,6 +14,7 @@ import type {
   Gradebook,
   MeResponse,
   PinPeek,
+  QuestionAnalysis,
   Quiz,
   QuizSummary,
   StudentOut,
@@ -74,7 +77,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => request<{ status: string; app: string }>("/api/health"),
+  health: () =>
+    request<{ status: string; app: string; public_base_url?: string; host_ip_is_loopback?: boolean }>(
+      "/api/health",
+    ),
   gameInfo: () => request<GameInfo>("/api/games/info"),
   peekPin: (pin: string) => request<PinPeek>(`/api/games/pin/${encodeURIComponent(pin)}`),
 
@@ -103,10 +109,23 @@ export const api = {
   exportQuiz: (id: number) => request<unknown>(`/api/quizzes/${id}/export`),
   importQuiz: (body: unknown) =>
     request<Quiz>("/api/quizzes/import", { method: "POST", body: JSON.stringify(body) }),
+  uploadImage: async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<{ url: string }>("/api/quizzes/upload-image", {
+      method: "POST",
+      body: fd,
+      headers: {},
+    });
+  },
 
   listHistory: () => request<GameHistory[]>("/api/games/history"),
   deleteHistory: (id: number) =>
     request<void>(`/api/games/history/${id}`, { method: "DELETE" }),
+  historyAnalysis: (id: number) =>
+    request<{ history_id: number; pin: string; quiz_title: string; analysis: QuestionAnalysis[] }>(
+      `/api/games/history/${id}/analysis`,
+    ),
 
   listClasses: () => request<ClassOut[]>("/api/classes"),
   createClass: (body: { name: string }) =>
@@ -130,11 +149,17 @@ export const api = {
   importRoster: async (classId: number, file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    return request<StudentOut[]>(`/api/classes/${classId}/students/import`, {
-      method: "POST",
-      body: fd,
-      headers: {},
-    });
+    const res = await request<{ added: StudentOut[]; skipped: Array<{ row: number; reason: string }> } | StudentOut[]>(
+      `/api/classes/${classId}/students/import`,
+      {
+        method: "POST",
+        body: fd,
+        headers: {},
+      },
+    );
+    // Backward compat: old server returned a bare array.
+    if (Array.isArray(res)) return { added: res, skipped: [] };
+    return res;
   },
 
   listAssignments: () => request<Assignment[]>("/api/assignments"),
@@ -170,6 +195,21 @@ export const api = {
   getAssignmentResults: (id: number) =>
     request<AssignmentResults>(`/api/assignments/${id}/results`),
   getAssignmentLive: (id: number) => request<AssignmentLive>(`/api/assignments/${id}/live`),
+  getAssignmentAnalysis: (id: number) =>
+    request<{ assignment_id: number; title: string; analysis: QuestionAnalysis[] }>(
+      `/api/assignments/${id}/analysis`,
+    ),
+  createAttempt: (assignmentId: number) =>
+    request<AttemptDetail["attempt"]>(`/api/assignments/${assignmentId}/attempts`, { method: "POST" }),
+  getAttempt: (attemptId: number) => request<AttemptDetail>(`/api/attempts/${attemptId}`),
+  submitAttempt: (
+    attemptId: number,
+    answers: Array<{ order_index: number; option_index?: number | null; answer_text?: string | null; question_id?: number | null }>,
+  ) =>
+    request<AttemptSubmitResult>(`/api/attempts/${attemptId}/submit`, {
+      method: "POST",
+      body: JSON.stringify({ answers }),
+    }),
 
   getGradebook: (classId: number) => request<Gradebook>(`/api/gradebook/${classId}`),
   exportGradebook: async (classId: number) => {

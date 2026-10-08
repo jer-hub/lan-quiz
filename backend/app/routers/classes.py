@@ -7,6 +7,7 @@ import io
 import logging
 import random
 import string
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
 from sqlalchemy import select
@@ -215,28 +216,41 @@ async def delete_student(
     return Response(status_code=204)
 
 
-@router.post("/{class_id}/students/import", response_model=list[StudentOut])
+@router.post("/{class_id}/students/import")
 async def import_roster_csv(
     class_id: int,
     file: UploadFile,
     teacher: User = Depends(require_teacher),
     db: AsyncSession = Depends(get_db),
-) -> list[StudentOut]:
-    """CSV columns: display_name,student_code[,password]"""
+) -> dict[str, Any]:
+    """CSV columns: display_name,student_code[,password]. Returns {added, skipped}."""
+    from fastapi import status as _status
+
     classroom = await _load_class(db, class_id, teacher)
-    raw = (await file.read()).decode("utf-8-sig")
+    try:
+        raw = (await file.read()).decode("utf-8-sig")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not read CSV (use UTF-8)")
     reader = csv.DictReader(io.StringIO(raw))
     if not reader.fieldnames:
         raise HTTPException(status_code=400, detail="Empty CSV")
     created: list[Student] = []
+    skipped: list[dict[str, Any]] = []
     existing_codes = {s.student_code for s in classroom.students}
-    for row in reader:
+    seen_in_file: set[str] = set()
+    for lineno, row in enumerate(reader, start=2):
         name = (row.get("display_name") or row.get("name") or "").strip()
         code = (row.get("student_code") or row.get("code") or "").strip().upper()
         password = (row.get("password") or code).strip()
         if not name or not code:
+            skipped.append({"row": lineno, "reason": "missing display_name or student_code"})
             continue
+        if code in seen_in_file:
+            skipped.append({"row": lineno, "reason": f"duplicate code {code} in file"})
+            continue
+        seen_in_file.add(code)
         if code in existing_codes:
+            skipped.append({"row": lineno, "reason": f"code {code} already in class"})
             continue
         student = Student(
             class_id=classroom.id,
@@ -247,7 +261,14 @@ async def import_roster_csv(
         db.add(student)
         created.append(student)
         existing_codes.add(code)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail="Import failed, no rows added")
     for s in created:
         await db.refresh(s)
-    return [_student_out(s) for s in created]
+    return {
+        "added": [_student_out(s).model_dump() for s in created],
+        "skipped": skipped,
+    }

@@ -5,15 +5,25 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class QuestionCreate(BaseModel):
     text: str = Field(..., min_length=1, max_length=2000)
     image: str | None = None
-    options: list[str] = Field(..., min_length=2, max_length=6)
-    correct_indices: list[int] = Field(..., min_length=1)
+    options: list[str] = Field(default_factory=list, max_length=6)
+    correct_indices: list[int] = Field(default_factory=list)
     time_limit: int = Field(default=20, ge=5, le=120)
+    kind: str = Field(default="mc", max_length=20)
+    answer_text: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("kind")
+    @classmethod
+    def validate_kind(cls, v: str) -> str:
+        kind = (v or "mc").strip().lower()
+        if kind not in ("mc", "true_false", "ordering", "short_answer"):
+            raise ValueError("kind must be mc|true_false|ordering|short_answer")
+        return kind
 
     @field_validator("options")
     @classmethod
@@ -31,6 +41,31 @@ class QuestionCreate(BaseModel):
             if idx < 0 or idx >= len(options):
                 raise ValueError(f"correct_indices out of range: {idx}")
         return sorted(set(v))
+
+    @model_validator(mode="after")
+    def validate_kind_payload(self) -> QuestionCreate:
+        kind = self.kind
+        if kind == "mc":
+            if len(self.options) < 2:
+                raise ValueError("mc needs 2-6 options")
+            if not self.correct_indices:
+                raise ValueError("mc needs correct_indices")
+        elif kind == "true_false":
+            if len(self.options) != 2:
+                raise ValueError("true_false needs exactly 2 options")
+            if len(self.correct_indices) != 1:
+                raise ValueError("true_false needs exactly 1 correct index")
+        elif kind == "ordering":
+            if len(self.options) < 2:
+                raise ValueError("ordering needs 2-6 options")
+            if sorted(self.correct_indices) != list(range(len(self.options))):
+                raise ValueError("ordering correct_indices must list every position")
+        elif kind == "short_answer":
+            if not (self.answer_text or "").strip():
+                raise ValueError("short_answer needs answer_text")
+            self.options = []
+            self.correct_indices = []
+        return self
 
 
 class QuestionOut(QuestionCreate):
@@ -269,3 +304,31 @@ class GradebookOut(BaseModel):
 class HealthOut(BaseModel):
     status: str
     app: str
+    public_base_url: str | None = None
+    host_ip_is_loopback: bool | None = None
+
+
+class AttemptAnswerIn(BaseModel):
+    question_id: int | None = None
+    order_index: int = 0
+    option_index: int | None = None
+    answer_text: str | None = None
+
+
+class AttemptOut(BaseModel):
+    id: int
+    assignment_id: int
+    student_id: int
+    score: int
+    answers: list[dict[str, Any]] = Field(default_factory=list)
+    started_at: datetime
+    submitted_at: datetime | None = None
+
+
+class AttemptSubmitOut(BaseModel):
+    id: int
+    assignment_id: int
+    score: int
+    total: int
+    correct_count: int
+    submitted_at: datetime | None = None

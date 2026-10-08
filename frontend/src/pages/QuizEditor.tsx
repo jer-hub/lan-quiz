@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import AiQuizGenerator from "../components/AiQuizGenerator";
-import type { Question } from "../shared";
+import type { Question, QuestionKind } from "../shared";
 
 const emptyQuestion = (): Question => ({
   text: "",
@@ -10,6 +10,8 @@ const emptyQuestion = (): Question => ({
   options: ["", "", "", ""],
   correct_indices: [0],
   time_limit: 20,
+  kind: "mc",
+  answer_text: null,
 });
 
 export default function QuizEditor() {
@@ -39,6 +41,8 @@ export default function QuizEditor() {
             options: q.options,
             correct_indices: q.correct_indices,
             time_limit: q.time_limit,
+            kind: (q.kind as QuestionKind) || "mc",
+            answer_text: q.answer_text ?? null,
           })),
         );
       } catch (e) {
@@ -114,6 +118,16 @@ export default function QuizEditor() {
       setError("Image too large (max ~1.5 MB)");
       return;
     }
+    // Prefer server upload (/uploads/* keeps quiz JSON small); fall back to data-URL.
+    try {
+      const body = await api.uploadImage(file);
+      if (body.url) {
+        updateQuestion(qi, { image: body.url });
+        return;
+      }
+    } catch {
+      /* fall through to data-URL */
+    }
     const reader = new FileReader();
     reader.onload = () => {
       updateQuestion(qi, { image: String(reader.result) });
@@ -172,6 +186,8 @@ export default function QuizEditor() {
                   options: q.options,
                   correct_indices: q.correct_indices,
                   time_limit: q.time_limit || 20,
+                  kind: (q.kind as QuestionKind) || "mc",
+                  answer_text: q.answer_text ?? null,
                 }))
               : [emptyQuestion()],
           );
@@ -258,6 +274,73 @@ export default function QuizEditor() {
               <img src={q.image} alt="" className="mb-3 max-h-40 rounded-xl object-contain" />
             )}
             <p className="mb-2 text-sm font-bold text-ink/70">
+              Type
+            </p>
+            <div className="mb-3 flex flex-wrap gap-2">
+              {(
+                [
+                  ["mc", "Multiple choice"],
+                  ["true_false", "True / False"],
+                  ["ordering", "Ordering"],
+                  ["short_answer", "Short answer"],
+                ] as Array<[QuestionKind, string]>
+              ).map(([k, label]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => {
+                    if (k === "true_false") {
+                      updateQuestion(qi, {
+                        kind: k,
+                        options: ["True", "False"],
+                        correct_indices: [0],
+                        answer_text: null,
+                      });
+                    } else if (k === "short_answer") {
+                      updateQuestion(qi, {
+                        kind: k,
+                        options: [],
+                        correct_indices: [],
+                        answer_text: q.answer_text || "",
+                      });
+                    } else if (k === "ordering") {
+                      const opts = q.options.length >= 2 ? q.options : ["First", "Second"];
+                      updateQuestion(qi, {
+                        kind: k,
+                        options: opts,
+                        correct_indices: opts.map((_, i) => i),
+                        answer_text: null,
+                      });
+                    } else {
+                      updateQuestion(qi, {
+                        kind: k,
+                        options: q.options.length >= 2 ? q.options : ["", "", "", ""],
+                        correct_indices: q.correct_indices.length ? q.correct_indices : [0],
+                        answer_text: null,
+                      });
+                    }
+                  }}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-bold ${
+                    (q.kind || "mc") === k ? "bg-brand text-white" : "bg-sky-100 text-ink"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {q.kind === "short_answer" ? (
+              <label className="mb-2 block">
+                <span className="mb-1 block text-sm font-bold">Correct answer</span>
+                <input
+                  className="w-full rounded-xl border border-sky-200 px-3 py-2"
+                  value={q.answer_text || ""}
+                  onChange={(e) => updateQuestion(qi, { answer_text: e.target.value })}
+                  placeholder="Accepted answer (case-insensitive)"
+                />
+              </label>
+            ) : (
+              <>
+            <p className="mb-2 text-sm font-bold text-ink/70">
               Options — tap the check to mark correct (one or more)
             </p>
             <ul className="space-y-2">
@@ -301,6 +384,8 @@ export default function QuizEditor() {
               >
                 + Add option
               </button>
+            )}
+              </>
             )}
           </div>
         ))}

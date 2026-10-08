@@ -14,6 +14,10 @@ export default function ClassDetailPage() {
   const [displayName, setDisplayName] = useState("");
   const [studentCode, setStudentCode] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [importReport, setImportReport] = useState<{
+    added: number;
+    skipped: Array<{ row: number; reason: string }>;
+  } | null>(null);
 
   const load = async () => {
     try {
@@ -52,11 +56,25 @@ export default function ClassDetailPage() {
 
   const onImport = async (file: File) => {
     try {
-      await api.importRoster(classId, file);
+      setImportReport(null);
+      const res = await api.importRoster(classId, file);
+      setImportReport({ added: res.added.length, skipped: res.skipped });
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Import failed");
     }
+  };
+
+  const downloadTemplate = () => {
+    const blob = new Blob(["display_name,student_code,password\nAda Lovelace,ADA01,\n"], {
+      type: "text/csv",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "roster-template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const exportCsv = async () => {
@@ -112,6 +130,13 @@ export default function ClassDetailPage() {
           >
             Import CSV
           </button>
+          <button
+            type="button"
+            className="rounded-xl border border-sky-300 bg-white px-4 py-2 font-bold"
+            onClick={downloadTemplate}
+          >
+            Template
+          </button>
           <input
             ref={fileRef}
             type="file"
@@ -127,6 +152,26 @@ export default function ClassDetailPage() {
         <p className="mt-2 text-xs text-ink/50">
           CSV headers: display_name,student_code[,password] — default password = student_code
         </p>
+        {importReport && (
+          <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm">
+            <p className="font-bold">
+              Imported {importReport.added} student{importReport.added === 1 ? "" : "s"}
+              {importReport.skipped.length > 0 && ` · ${importReport.skipped.length} skipped`}
+            </p>
+            {importReport.skipped.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {importReport.skipped.slice(0, 10).map((s, i) => (
+                  <li key={i} className="text-ink/70">
+                    Row {s.row}: {s.reason}
+                  </li>
+                ))}
+                {importReport.skipped.length > 10 && (
+                  <li className="text-ink/50">…and {importReport.skipped.length - 10} more</li>
+                )}
+              </ul>
+            )}
+          </div>
+        )}
         <ul className="mt-4 divide-y divide-sky-100 rounded-2xl border border-sky-200 bg-white">
           {students.map((s) => (
             <li key={s.id} className="flex items-center justify-between px-4 py-3">

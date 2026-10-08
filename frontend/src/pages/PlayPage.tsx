@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api";
-import { useSocket, useSocketEvent } from "../hooks/useSocket";
+import { clearJoinSession, loadJoinSession, saveJoinSession, useSocket, useSocketEvent } from "../hooks/useSocket";
+import { useLang } from "../i18n";
 import type {
   GameEndedPayload,
   LeaderboardEntry,
@@ -21,12 +22,17 @@ const COLORS = ["#e11d48", "#2563eb", "#ca8a04", "#059669", "#7c3aed", "#ea580c"
 export default function PlayPage() {
   const [params] = useSearchParams();
   const { socket, connected } = useSocket();
+  const { t } = useLang();
 
   const [phase, setPhase] = useState<Phase>("join");
   const [pin, setPin] = useState((params.get("pin") || "").toUpperCase());
   const [nickname, setNickname] = useState("");
   const [studentCode, setStudentCode] = useState("");
   const [requiresCode, setRequiresCode] = useState(false);
+  const [teamMode, setTeamMode] = useState(false);
+  const [teams, setTeams] = useState<string[]>([]);
+  const [team, setTeam] = useState("");
+  const [shortText, setShortText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [lobby, setLobby] = useState<LobbyState | null>(null);
   const [mySid, setMySid] = useState<string | null>(null);
@@ -37,18 +43,54 @@ export default function PlayPage() {
   const [lastPoints, setLastPoints] = useState<number | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [final, setFinal] = useState<GameEndedPayload | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [deviceOffline, setDeviceOffline] = useState(
+    typeof navigator !== "undefined" ? !navigator.onLine : false,
+  );
+  const rejoinedRef = useRef(false);
+
+  useEffect(() => {
+    const on = () => setDeviceOffline(false);
+    const off = () => setDeviceOffline(true);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+
+  // Prefill from stored session (refresh mid-game).
+  useEffect(() => {
+    const stored = loadJoinSession();
+    if (!stored) return;
+    if (!pin && stored.pin) setPin(stored.pin);
+    if (!nickname && stored.nickname) setNickname(stored.nickname);
+    if (!studentCode && stored.student_code) setStudentCode(stored.student_code);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const p = pin.trim().toUpperCase();
     if (p.length < 4) {
       setRequiresCode(false);
+      setTeamMode(false);
+      setTeams([]);
       return;
     }
     const t = window.setTimeout(() => {
       void api
         .peekPin(p)
-        .then((info) => setRequiresCode(info.requires_student_code))
-        .catch(() => setRequiresCode(false));
+        .then((info) => {
+          setRequiresCode(info.requires_student_code);
+          setTeamMode(!!info.team_mode);
+          setTeams(info.teams || []);
+        })
+        .catch(() => {
+          setRequiresCode(false);
+          setTeamMode(false);
+          setTeams([]);
+        });
     }, 300);
     return () => window.clearTimeout(t);
   }, [pin]);
@@ -62,6 +104,14 @@ export default function PlayPage() {
     setLobby(data);
     setPhase("lobby");
     setError(null);
+    setReconnecting(false);
+    rejoinedRef.current = false;
+    saveJoinSession({
+      pin: data.pin,
+      sid: data.sid,
+      nickname: data.nickname || nickname,
+      student_code: studentCode.trim().toUpperCase() || undefined,
+    });
   });
 
   useSocketEvent("lobby_update", (data: LobbyState) => {
@@ -72,6 +122,8 @@ export default function PlayPage() {
     setError(data.reason || "You were removed from the game");
     setPhase("join");
     setLobby(null);
+    clearJoinSession();
+    rejoinedRef.current = false;
   });
 
   useSocketEvent("game_started", () => {
@@ -81,6 +133,7 @@ export default function PlayPage() {
   useSocketEvent("question_started", (data: QuestionPayload) => {
     setQuestion(data);
     setSelected(null);
+    setShortText("");
     setLocked(false);
     setReveal(null);
     setLastPoints(null);
@@ -111,7 +164,33 @@ export default function PlayPage() {
     setFinal(data);
     setLeaderboard(data.leaderboard);
     setPhase("finished");
+    clearJoinSession();
   });
+
+  // Auto-rejoin on (re)connect using stored sid.
+  useEffect(() => {
+    if (!connected || rejoinedRef.current) return;
+    const stored = loadJoinSession();
+    if (!stored?.pin) return;
+    // Only auto-rejoin if the PIN matches what the user sees (or lobby phase).
+    const currentPin = (pin || stored.pin).trim().toUpperCase();
+    if (phase === "join" && !pin && stored.pin) setPin(stored.pin);
+    if (phase !== "join" || stored.pin === currentPin) {
+      rejoinedRef.current = true;
+      if (phase !== "join") setReconnecting(true);
+      socket.emit("join_game", {
+        pin: stored.pin,
+        nickname: stored.nickname,
+        student_code: stored.student_code || undefined,
+        rejoin_sid: stored.sid,
+      });
+    }
+  }, [connected, socket, phase, pin]);
+
+  useEffect(() => {
+    if (connected) setReconnecting(false);
+    else if (phase !== "join") setReconnecting(true);
+  }, [connected, phase]);
 
   const join = useCallback(() => {
     setError(null);
@@ -119,10 +198,15 @@ export default function PlayPage() {
       pin: pin.trim().toUpperCase(),
       nickname: nickname.trim(),
       student_code: studentCode.trim().toUpperCase() || undefined,
+      team: teamMode ? team || undefined : undefined,
     });
-  }, [socket, pin, nickname, studentCode]);
+  }, [socket, pin, nickname, studentCode, teamMode, team]);
 
-  const canJoin = connected && pin.trim().length >= 4 && (requiresCode ? studentCode.trim().length >= 1 : nickname.trim().length >= 1);
+  const canJoin =
+    connected &&
+    pin.trim().length >= 4 &&
+    (requiresCode ? studentCode.trim().length >= 1 : nickname.trim().length >= 1) &&
+    (!teamMode || team.length >= 1);
 
   const submit = useCallback(
     (optionIndex: number) => {
@@ -132,6 +216,12 @@ export default function PlayPage() {
     },
     [locked, phase, socket],
   );
+
+  const submitShort = useCallback(() => {
+    if (locked || phase !== "question" || !shortText.trim()) return;
+    setSelected(-1);
+    socket.emit("submit_answer", { answer_text: shortText.trim() });
+  }, [locked, phase, socket, shortText]);
 
   const myRank = useMemo(() => {
     if (!mySid) return null;
@@ -148,6 +238,21 @@ export default function PlayPage() {
             You placed #{myRank.rank} · {myRank.score} pts
           </p>
         )}
+        {final.team_scores && final.team_scores.length > 0 && (
+          <div className="mt-6 rounded-2xl border border-sky-200 bg-white p-4">
+            <h2 className="text-center font-display text-2xl">Teams</h2>
+            <ul className="mt-2 space-y-1">
+              {final.team_scores.map((t) => (
+                <li key={t.team} className="flex justify-between font-bold">
+                  <span>
+                    #{t.rank} {t.team}
+                  </span>
+                  <span>{t.score} pts</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="mt-8">
           <Podium podium={final.podium} />
         </div>
@@ -160,17 +265,27 @@ export default function PlayPage() {
 
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
+      {deviceOffline && (
+        <p className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-center text-sm font-bold text-amber-800" role="status">
+          You&apos;re offline — the join form stays available and will reconnect automatically.
+        </p>
+      )}
+      {reconnecting && phase !== "join" && (
+        <p className="mb-3 rounded-xl bg-amber-50 px-3 py-2 text-center text-sm font-bold text-amber-800 animate-pulse-soft" role="status">
+          {connected ? "Rejoining…" : "Connection lost — score kept, reconnecting…"}
+        </p>
+      )}
       {phase === "join" && (
         <div className="animate-slide-up rounded-3xl border border-sky-200 bg-white p-6 shadow-sm">
-          <h1 className="font-display text-4xl">Join LanQuiz</h1>
-          <p className="mt-1 text-ink/70">Enter the PIN shown on the host screen.</p>
+          <h1 className="font-display text-4xl">{t.joinTitle}</h1>
+          <p className="mt-1 text-ink/70">{t.joinSub}</p>
           {error && (
             <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
               {error}
             </p>
           )}
           <label className="mt-6 block">
-            <span className="mb-1 block text-sm font-bold">Game PIN</span>
+            <span className="mb-1 block text-sm font-bold">{t.gamePin}</span>
             <input
               className="w-full rounded-xl border border-sky-200 px-4 py-3 text-center font-display text-3xl tracking-[0.25em] uppercase"
               value={pin}
@@ -182,7 +297,7 @@ export default function PlayPage() {
           </label>
           {requiresCode ? (
             <label className="mt-4 block">
-              <span className="mb-1 block text-sm font-bold">Student code</span>
+              <span className="mb-1 block text-sm font-bold">{t.studentCode}</span>
               <input
                 className="w-full rounded-xl border border-sky-200 px-4 py-3 text-lg font-semibold uppercase"
                 value={studentCode}
@@ -191,12 +306,12 @@ export default function PlayPage() {
                 placeholder="From your teacher roster"
               />
               <span className="mt-1 block text-xs text-ink/50">
-                Class game — your display name comes from the roster.
+                {t.classGameNote}
               </span>
             </label>
           ) : (
             <label className="mt-4 block">
-              <span className="mb-1 block text-sm font-bold">Nickname</span>
+              <span className="mb-1 block text-sm font-bold">{t.nickname}</span>
               <input
                 className="w-full rounded-xl border border-sky-200 px-4 py-3 text-lg font-semibold"
                 value={nickname}
@@ -206,13 +321,30 @@ export default function PlayPage() {
               />
             </label>
           )}
+          {teamMode && teams.length > 0 && (
+            <label className="mt-4 block">
+              <span className="mb-1 block text-sm font-bold">{t.team}</span>
+              <select
+                className="w-full rounded-xl border border-sky-200 px-4 py-3 text-lg font-semibold"
+                value={team}
+                onChange={(e) => setTeam(e.target.value)}
+              >
+                <option value="">{t.chooseTeam}</option>
+                {teams.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <button
             type="button"
             disabled={!canJoin}
             onClick={join}
             className="mt-6 w-full rounded-2xl bg-brand py-4 text-xl font-extrabold text-white disabled:opacity-50"
           >
-            {connected ? "Join game" : "Connecting…"}
+            {connected ? t.joinGame : t.connecting}
           </button>
         </div>
       )}
@@ -249,26 +381,52 @@ export default function PlayPage() {
               className="mx-auto mt-4 max-h-40 rounded-xl object-contain"
             />
           )}
-          <div className="mt-6 grid grid-cols-2 gap-3">
-            {question.options.map((opt, i) => {
-              const isSelected = selected === i;
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  disabled={locked}
-                  onClick={() => submit(i)}
-                  className={`min-h-28 rounded-2xl p-4 text-left text-lg font-extrabold text-white shadow-md transition active:scale-[0.98] disabled:opacity-80 ${
-                    isSelected ? "ring-4 ring-white ring-offset-2 ring-offset-sky-300" : ""
-                  }`}
-                  style={{ backgroundColor: COLORS[i % COLORS.length] }}
-                >
-                  <span className="mb-1 block text-2xl opacity-90">{OPTION_SHAPES[i]}</span>
-                  {opt}
-                </button>
-              );
-            })}
-          </div>
+          {question.kind === "short_answer" ? (
+            <div className="mt-6">
+              <input
+                className="w-full rounded-xl border border-sky-200 px-4 py-3 text-lg"
+                value={shortText}
+                onChange={(e) => setShortText(e.target.value)}
+                disabled={locked}
+                placeholder="Type your answer"
+                maxLength={200}
+              />
+              <button
+                type="button"
+                disabled={locked || !shortText.trim()}
+                onClick={submitShort}
+                className="mt-3 w-full rounded-2xl bg-brand py-3 text-lg font-extrabold text-white disabled:opacity-50"
+              >
+                {locked ? "Locked" : "Submit answer"}
+              </button>
+            </div>
+          ) : (
+            <div className="mt-6 grid grid-cols-2 gap-3">
+              {question.options.map((opt, i) => {
+                const isSelected = selected === i;
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    disabled={locked}
+                    onClick={() => submit(i)}
+                    className={`min-h-28 rounded-2xl p-4 text-left text-lg font-extrabold text-white shadow-md transition active:scale-[0.98] disabled:opacity-80 ${
+                      isSelected ? "ring-4 ring-white ring-offset-2 ring-offset-sky-300" : ""
+                    }`}
+                    style={{ backgroundColor: COLORS[i % COLORS.length] }}
+                  >
+                    <span className="mb-1 block text-2xl opacity-90">{OPTION_SHAPES[i]}</span>
+                    {opt}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {question.kind === "ordering" && (
+            <p className="mt-3 text-center text-xs text-ink/50">
+              Ordering — tap the option that comes first (MVP).
+            </p>
+          )}
           {phase === "waiting" && (
             <p className="mt-6 text-center font-bold text-brand-dark animate-pulse-soft">
               Waiting for others…

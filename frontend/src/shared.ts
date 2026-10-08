@@ -1,3 +1,5 @@
+export type QuestionKind = "mc" | "true_false" | "ordering" | "short_answer";
+
 export interface Question {
   id?: number;
   text: string;
@@ -6,6 +8,8 @@ export interface Question {
   correct_indices: number[];
   time_limit: number;
   order_index?: number;
+  kind?: QuestionKind;
+  answer_text?: string | null;
 }
 
 export interface QuizSummary {
@@ -28,6 +32,15 @@ export interface PlayerInfo {
   score: number;
   is_host?: boolean;
   student_id?: number | null;
+  connected?: boolean;
+  team?: string | null;
+}
+
+export interface TeamScore {
+  rank: number;
+  team: string;
+  score: number;
+  players: number;
 }
 
 export interface LeaderboardEntry {
@@ -50,6 +63,9 @@ export interface LobbyState {
   requires_student_code?: boolean;
   assignment_id?: number | null;
   class_id?: number | null;
+  team_mode?: boolean;
+  teams?: string[];
+  team_scores?: TeamScore[];
 }
 
 export interface QuestionPayload {
@@ -61,12 +77,15 @@ export interface QuestionPayload {
   options: string[];
   time_limit: number;
   started_at?: number;
+  kind?: QuestionKind;
 }
 
 export interface QuestionEndedPayload {
   question_index: number;
   correct_indices: number[];
   options: string[];
+  kind?: QuestionKind;
+  answer_text?: string | null;
   results: Array<{
     sid: string;
     nickname: string;
@@ -77,6 +96,7 @@ export interface QuestionEndedPayload {
     score: number;
   }>;
   leaderboard: LeaderboardEntry[];
+  team_scores?: TeamScore[];
   answer_count: number;
   player_count: number;
 }
@@ -86,6 +106,8 @@ export interface GameEndedPayload {
   quiz_title: string;
   leaderboard: LeaderboardEntry[];
   podium: LeaderboardEntry[];
+  team_scores?: TeamScore[];
+  team_mode?: boolean;
 }
 
 export interface GameInfo {
@@ -216,12 +238,60 @@ export interface Gradebook {
   rows: GradebookRow[];
 }
 
+export interface QuestionAnalysis {
+  question_index: number;
+  question_id: number | null;
+  text: string;
+  kind: string;
+  options: string[];
+  correct_indices: number[];
+  total: number;
+  correct: number;
+  pct_correct: number;
+  distractor_counts: Record<string, number>;
+}
+
 export interface PinPeek {
   pin: string;
   quiz_title: string;
   status: string;
   requires_student_code: boolean;
   player_count: number;
+  team_mode?: boolean;
+  teams?: string[];
+}
+
+export interface AttemptQuestion {
+  order_index: number;
+  question_id: number;
+  text: string;
+  image?: string | null;
+  options: string[];
+  time_limit: number;
+  kind: QuestionKind;
+}
+
+export interface AttemptDetail {
+  attempt: {
+    id: number;
+    assignment_id: number;
+    student_id: number;
+    score: number;
+    answers: Array<Record<string, unknown>>;
+    started_at: string;
+    submitted_at: string | null;
+  };
+  assignment: Assignment;
+  quiz: { id: number; title: string; questions: AttemptQuestion[] };
+}
+
+export interface AttemptSubmitResult {
+  id: number;
+  assignment_id: number;
+  score: number;
+  total: number;
+  correct_count: number;
+  submitted_at: string | null;
 }
 
 export interface AiModelPreset {

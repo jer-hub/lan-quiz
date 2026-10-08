@@ -25,12 +25,43 @@ logging.basicConfig(
 logger = logging.getLogger("lanquiz")
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+UPLOADS_DIR = settings.data_dir / "uploads"
+try:
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    # Fail fast on default secret (allows ALLOW_DEFAULT_SECRET=true for local dev).
+    settings.ensure_secure()
+    if settings.is_default_secret:
+        logger.warning("Using default JWT secret — local dev only, never share/expose.")
+    if settings.host_ip_is_loopback:
+        logger.warning(
+            "HOST_IP=%s is loopback — students on other devices cannot join. "
+            "Set HOST_IP to your LAN IP (e.g. 192.168.1.42).",
+            settings.host_ip,
+        )
     await init_db()
+    try:
+        from app.game_manager import GameSession, game_manager
+        from app.session_store import load_snapshots
+
+        snaps = await load_snapshots()
+        for data in snaps:
+            try:
+                session = GameSession.from_snapshot(data)
+                game_manager.inject_restored(session)
+            except Exception:
+                logger.exception("Skipping snapshot pin=%s", data.get("pin"))
+        if snaps:
+            logger.info("Restored %d live game(s) from snapshots", len(snaps))
+    except Exception:
+        logger.exception("Snapshot restore failed")
     logger.info(
         "%s ready — bind %s:%s — public URL %s",
         settings.app_name,
@@ -57,13 +88,21 @@ fastapi_app.include_router(quizzes.router)
 fastapi_app.include_router(games.router)
 fastapi_app.include_router(classes.router)
 fastapi_app.include_router(assignments.router)
+fastapi_app.include_router(assignments.attempt_router)
 fastapi_app.include_router(assignments.gradebook_router)
 fastapi_app.include_router(ai.router)
+
+fastapi_app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 
 @fastapi_app.get("/api/health", response_model=HealthOut)
 async def health() -> HealthOut:
-    return HealthOut(status="ok", app=settings.app_name)
+    return HealthOut(
+        status="ok",
+        app=settings.app_name,
+        public_base_url=settings.public_base_url,
+        host_ip_is_loopback=settings.host_ip_is_loopback,
+    )
 
 
 # Socket.IO server wrapping FastAPI

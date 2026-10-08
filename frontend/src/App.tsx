@@ -10,10 +10,39 @@ import TeacherLoginPage from "./pages/TeacherLoginPage";
 import TeacherRegisterPage from "./pages/TeacherRegisterPage";
 import StudentLoginPage from "./pages/StudentLoginPage";
 import StudentDashboard from "./pages/StudentDashboard";
+import AttemptPage from "./pages/AttemptPage";
 import ClassesPage from "./pages/ClassesPage";
 import ClassDetailPage from "./pages/ClassDetailPage";
 import AssignmentsPage from "./pages/AssignmentsPage";
 import { Link } from "react-router-dom";
+
+function LangToggle() {
+  const toggle = () => {
+    try {
+      const cur = localStorage.getItem("lanquiz_lang") === "vi" ? "en" : "vi";
+      localStorage.setItem("lanquiz_lang", cur);
+    } catch {
+      /* ignore */
+    }
+    window.location.reload();
+  };
+  let label = "VI";
+  try {
+    label = localStorage.getItem("lanquiz_lang") === "vi" ? "EN" : "VI";
+  } catch {
+    /* ignore */
+  }
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      className="rounded-lg bg-sky-100 px-2 py-1 text-xs font-extrabold"
+      aria-label="Toggle language"
+    >
+      {label}
+    </button>
+  );
+}
 
 export default function App() {
   return (
@@ -29,7 +58,10 @@ export default function App() {
           <Link to="/" className="font-display text-2xl tracking-tight text-brand-dark">
             Lan<span className="text-accent">Quiz</span>
           </Link>
-          <NavLinks />
+          <div className="flex items-center gap-3">
+            <NavLinks />
+            <LangToggle />
+          </div>
         </div>
       </header>
       <main id="main">
@@ -54,6 +86,7 @@ export default function App() {
 
           <Route element={<StudentGate />}>
             <Route path="/student" element={<StudentDashboard />} />
+            <Route path="/student/attempt/:attemptId" element={<AttemptPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

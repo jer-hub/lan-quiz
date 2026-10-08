@@ -6,6 +6,7 @@ import type {
   AssignmentLive,
   AssignmentResults,
   ClassOut,
+  QuestionAnalysis,
   QuizSummary,
 } from "../shared";
 
@@ -51,6 +52,7 @@ export default function AssignmentsPage() {
   const [editPolicy, setEditPolicy] = useState("best");
   const [resultsId, setResultsId] = useState<number | null>(null);
   const [results, setResults] = useState<AssignmentResults | null>(null);
+  const [analysis, setAnalysis] = useState<QuestionAnalysis[]>([]);
   const [liveMap, setLiveMap] = useState<Record<number, AssignmentLive>>({});
 
   const load = useCallback(async () => {
@@ -145,10 +147,17 @@ export default function AssignmentsPage() {
       if (resultsId === id) {
         setResultsId(null);
         setResults(null);
+        setAnalysis([]);
         return;
       }
       setResults(await api.getAssignmentResults(id));
       setResultsId(id);
+      try {
+        const a = await api.getAssignmentAnalysis(id);
+        setAnalysis(a.analysis);
+      } catch {
+        setAnalysis([]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load results");
     }
@@ -350,7 +359,7 @@ export default function AssignmentsPage() {
                         Due: {formatDue(a.due_at)} · Attempts:{" "}
                         {a.max_attempts ?? "unlimited"} · Score: {a.score_policy || "best"}
                       </p>
-                      {live?.active && live.pin && (
+                      {live?.active && live.pin ? (
                         <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">
                           Live now — PIN{" "}
                           <span className="font-mono text-lg tracking-wider">{live.pin}</span>
@@ -358,6 +367,12 @@ export default function AssignmentsPage() {
                           {live.player_count} player{live.player_count === 1 ? "" : "s"} ·{" "}
                           {live.status}
                         </p>
+                      ) : (
+                        a.status === "open" && (
+                          <p className="mt-2 rounded-lg bg-sky-50 px-3 py-2 text-sm font-bold text-brand-dark">
+                            Homework available — students can play solo from their dashboard
+                          </p>
+                        )
                       )}
                     </>
                   )}
@@ -419,34 +434,62 @@ export default function AssignmentsPage() {
                 )}
               </div>
               {resultsId === a.id && results && (
-                <div className="mt-4 overflow-x-auto rounded-xl border border-sky-100">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-sky-50 text-ink/70">
-                      <tr>
-                        <th className="px-3 py-2">Student</th>
-                        <th className="px-3 py-2">Code</th>
-                        <th className="px-3 py-2">Score</th>
-                        <th className="px-3 py-2">Plays</th>
-                        <th className="px-3 py-2">Last played</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {results.rows.map((r) => (
-                        <tr key={r.student_id} className="border-t border-sky-100">
-                          <td className="px-3 py-2 font-semibold">{r.display_name}</td>
-                          <td className="px-3 py-2 font-mono">{r.student_code}</td>
-                          <td className="px-3 py-2">{r.score ?? "—"}</td>
-                          <td className="px-3 py-2">{r.play_count}</td>
-                          <td className="px-3 py-2 text-ink/60">
-                            {r.last_played_at
-                              ? new Date(r.last_played_at).toLocaleString()
-                              : "Not played"}
-                          </td>
+                <>
+                  <div className="mt-4 overflow-x-auto rounded-xl border border-sky-100">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-sky-50 text-ink/70">
+                        <tr>
+                          <th className="px-3 py-2">Student</th>
+                          <th className="px-3 py-2">Code</th>
+                          <th className="px-3 py-2">Score</th>
+                          <th className="px-3 py-2">Plays</th>
+                          <th className="px-3 py-2">Last played</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {results.rows.map((r) => (
+                          <tr key={r.student_id} className="border-t border-sky-100">
+                            <td className="px-3 py-2 font-semibold">{r.display_name}</td>
+                            <td className="px-3 py-2 font-mono">{r.student_code}</td>
+                            <td className="px-3 py-2">{r.score ?? "—"}</td>
+                            <td className="px-3 py-2">{r.play_count}</td>
+                            <td className="px-3 py-2 text-ink/60">
+                              {r.last_played_at
+                                ? new Date(r.last_played_at).toLocaleString()
+                                : "Not played"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {analysis.length > 0 && (
+                    <div className="mt-3 overflow-x-auto rounded-xl border border-sky-100">
+                      <table className="w-full text-left text-sm">
+                        <thead className="bg-sky-50">
+                          <tr>
+                            <th className="px-3 py-2">Q#</th>
+                            <th className="px-3 py-2">Question</th>
+                            <th className="px-3 py-2">% correct</th>
+                            <th className="px-3 py-2">Answers</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {analysis.map((q) => (
+                            <tr key={q.question_index} className="border-t border-sky-100">
+                              <td className="px-3 py-2 font-bold">Q{q.question_index + 1}</td>
+                              <td className="max-w-[260px] truncate px-3 py-2">{q.text}</td>
+                              <td className="px-3 py-2 font-bold">{q.pct_correct}%</td>
+                              <td className="px-3 py-2 text-ink/60">
+                                {q.correct}/{q.total}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
               )}
             </li>
           );

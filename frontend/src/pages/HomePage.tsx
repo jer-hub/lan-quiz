@@ -1,8 +1,10 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { useLang } from "../i18n";
 
 export default function HomePage() {
   const { isTeacher, isStudent } = useAuth();
+  const { t } = useLang();
 
   return (
     <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-6xl flex-col justify-center px-4 py-10">
@@ -19,11 +21,10 @@ export default function HomePage() {
             LanQuiz
           </p>
           <h1 className="mt-4 font-display text-2xl leading-tight sm:text-3xl">
-            Classroom quizzes on your own Wi‑Fi
+            {t.heroTitle}
           </h1>
           <p className="mt-3 max-w-lg text-base text-sky-50 sm:text-lg">
-            Teachers manage classes and assignments. Students join with a roster code.
-            Live PIN games work fully offline after setup.
+            {t.heroSub}
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             {isTeacher ? (
@@ -31,14 +32,14 @@ export default function HomePage() {
                 to="/host"
                 className="rounded-2xl bg-accent px-6 py-3 text-lg font-extrabold text-ink shadow-lg transition hover:brightness-110"
               >
-                Teacher dashboard
+                {t.teacherDashboard}
               </Link>
             ) : isStudent ? (
               <Link
                 to="/student"
                 className="rounded-2xl bg-accent px-6 py-3 text-lg font-extrabold text-ink shadow-lg transition hover:brightness-110"
               >
-                My class
+                {t.myClass}
               </Link>
             ) : (
               <>
@@ -46,13 +47,13 @@ export default function HomePage() {
                   to="/login"
                   className="rounded-2xl bg-accent px-6 py-3 text-lg font-extrabold text-ink shadow-lg transition hover:brightness-110"
                 >
-                  Teacher login
+                  {t.teacherLogin}
                 </Link>
                 <Link
                   to="/student/login"
                   className="rounded-2xl bg-white/20 px-6 py-3 text-lg font-bold backdrop-blur transition hover:bg-white/30"
                 >
-                  Student login
+                  {t.studentLogin}
                 </Link>
               </>
             )}
@@ -60,9 +61,25 @@ export default function HomePage() {
               to="/play"
               className="rounded-2xl bg-white/20 px-6 py-3 text-lg font-bold backdrop-blur transition hover:bg-white/30"
             >
-              Join with PIN
+              {t.joinPin}
             </Link>
           </div>
+        </div>
+      </section>
+      <section className="mt-6 grid gap-4 sm:grid-cols-2">
+        <div className="rounded-3xl border border-sky-200 bg-white p-6 shadow-sm">
+          <h2 className="font-display text-2xl">Host on this PC</h2>
+          <p className="mt-2 text-ink/70">
+            Teachers create the game here and show the PIN/QR. Allow TCP 8000 through the
+            firewall when Windows asks.
+          </p>
+        </div>
+        <div className="rounded-3xl border border-sky-200 bg-white p-6 shadow-sm">
+          <h2 className="font-display text-2xl">Join via phone</h2>
+          <p className="mt-2 text-ink/70">
+            Same Wi-Fi + scan QR (or open /play with the PIN). If QR shows localhost, the
+            host must set HOST_IP to its LAN IP and restart.
+          </p>
         </div>
       </section>
     </div>

@@ -219,14 +219,9 @@ def _shuffle_options(
     options: list[str], correct_indices: list[int]
 ) -> tuple[list[str], list[int]]:
     """Randomize option order so correct answers are not stuck on A."""
-    order = list(range(len(options)))
-    random.shuffle(order)
-    shuffled = [options[i] for i in order]
-    # old_index -> new_index
-    remap = {old: new for new, old in enumerate(order)}
-    new_correct = sorted({remap[i] for i in correct_indices if i in remap})
-    if not new_correct:
-        new_correct = [0]
+    from app.utils.shuffle import shuffle_options
+
+    shuffled, new_correct, _ = shuffle_options(options, correct_indices)
     return shuffled, new_correct
 
 

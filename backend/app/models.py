@@ -71,10 +71,12 @@ class Question(Base):
     quiz_id: Mapped[int] = mapped_column(ForeignKey("quizzes.id", ondelete="CASCADE"), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     image: Mapped[str | None] = mapped_column(Text, nullable=True)
-    options_json: Mapped[str] = mapped_column(Text, nullable=False)
-    correct_indices_json: Mapped[str] = mapped_column(Text, nullable=False)
+    options_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    correct_indices_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     time_limit: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
     order_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), default="mc", nullable=False)
+    answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     quiz: Mapped[Quiz] = relationship("Quiz", back_populates="questions")
 
@@ -136,6 +138,7 @@ class Assignment(Base):
     histories: Mapped[list[GameHistory]] = relationship(
         "GameHistory",
         back_populates="assignment",
+        cascade="all, delete-orphan",
         passive_deletes=True,
     )
 
@@ -147,15 +150,22 @@ class GameHistory(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     pin: Mapped[str] = mapped_column(String(10), nullable=False)
-    quiz_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quiz_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quizzes.id", ondelete="SET NULL"), nullable=True
+    )
     quiz_title: Mapped[str] = mapped_column(String(200), nullable=False)
-    teacher_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    class_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    teacher_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    class_id: Mapped[int | None] = mapped_column(
+        ForeignKey("classes.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     assignment_id: Mapped[int | None] = mapped_column(
         ForeignKey("assignments.id", ondelete="SET NULL"), nullable=True, index=True
     )
     played_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     results_json: Mapped[str] = mapped_column(Text, nullable=False)
+    questions_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     player_count: Mapped[int] = mapped_column(Integer, default=0)
 
     assignment: Mapped[Assignment | None] = relationship("Assignment", back_populates="histories")
@@ -182,3 +192,41 @@ class GameResult(Base):
 
     history: Mapped[GameHistory] = relationship("GameHistory", back_populates="result_rows")
     student: Mapped[Student | None] = relationship("Student", back_populates="results")
+
+
+class Attempt(Base):
+    """Self-paced homework attempt (async, no host)."""
+
+    __tablename__ = "attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    assignment_id: Mapped[int] = mapped_column(
+        ForeignKey("assignments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    student_id: Mapped[int] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    answers_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ActiveGame(Base):
+    """Crash-safe snapshot of a live lobby (restored on startup)."""
+
+    __tablename__ = "active_games"
+
+    pin: Mapped[str] = mapped_column(String(10), primary_key=True)
+    quiz_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    quiz_title: Mapped[str] = mapped_column(String(200), nullable=False)
+    teacher_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    class_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assignment_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    requires_student_code: Mapped[bool] = mapped_column(default=False, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="lobby", nullable=False)
+    current_question_index: Mapped[int] = mapped_column(Integer, default=-1, nullable=False)
+    questions_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    players_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    question_history_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

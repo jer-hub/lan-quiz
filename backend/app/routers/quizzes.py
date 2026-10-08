@@ -6,12 +6,13 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth import require_teacher
+from app.config import settings
 from app.database import get_db
 from app.models import Assignment, Question, Quiz, User
 from app.schemas import (
@@ -41,10 +42,12 @@ def _question_to_out(q: Question) -> QuestionOut:
         id=q.id,
         text=q.text,
         image=q.image,
-        options=json.loads(q.options_json),
-        correct_indices=json.loads(q.correct_indices_json),
+        options=json.loads(q.options_json or "[]"),
+        correct_indices=json.loads(q.correct_indices_json or "[]"),
         time_limit=q.time_limit,
         order_index=q.order_index,
+        kind=q.kind or "mc",
+        answer_text=q.answer_text,
     )
 
 
@@ -83,6 +86,8 @@ def _replace_questions(quiz: Quiz, questions: list[QuestionCreate]) -> None:
                 correct_indices_json=_indices_to_json(q.correct_indices),
                 time_limit=q.time_limit,
                 order_index=i,
+                kind=q.kind,
+                answer_text=q.answer_text,
             )
         )
 
@@ -125,6 +130,21 @@ async def create_quiz(
     await db.commit()
     quiz = await _load_owned_quiz(db, quiz.id, teacher)
     logger.info("Quiz created id=%s title=%s teacher=%s", quiz.id, quiz.title, teacher.id)
+    return _quiz_to_out(quiz)
+
+
+@router.post("/import", response_model=QuizOut, status_code=status.HTTP_201_CREATED)
+async def import_quiz(
+    payload: QuizImport,
+    teacher: User = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> QuizOut:
+    quiz = Quiz(title=payload.title, description=payload.description, teacher_id=teacher.id)
+    _replace_questions(quiz, payload.questions)
+    db.add(quiz)
+    await db.commit()
+    quiz = await _load_owned_quiz(db, quiz.id, teacher)
+    logger.info("Quiz imported id=%s title=%s", quiz.id, quiz.title)
     return _quiz_to_out(quiz)
 
 
@@ -187,25 +207,50 @@ async def export_quiz(
             {
                 "text": q.text,
                 "image": q.image,
-                "options": json.loads(q.options_json),
-                "correct_indices": json.loads(q.correct_indices_json),
+                "options": json.loads(q.options_json or "[]"),
+                "correct_indices": json.loads(q.correct_indices_json or "[]"),
                 "time_limit": q.time_limit,
+                "kind": q.kind or "mc",
+                "answer_text": q.answer_text,
             }
             for q in quiz.questions
         ],
     }
 
 
-@router.post("/import", response_model=QuizOut, status_code=status.HTTP_201_CREATED)
-async def import_quiz(
-    payload: QuizImport,
+@router.post("/upload-image")
+async def upload_image(
+    file: UploadFile,
     teacher: User = Depends(require_teacher),
-    db: AsyncSession = Depends(get_db),
-) -> QuizOut:
-    quiz = Quiz(title=payload.title, description=payload.description, teacher_id=teacher.id)
-    _replace_questions(quiz, payload.questions)
-    db.add(quiz)
-    await db.commit()
-    quiz = await _load_owned_quiz(db, quiz.id, teacher)
-    logger.info("Quiz imported id=%s title=%s", quiz.id, quiz.title)
-    return _quiz_to_out(quiz)
+) -> dict[str, Any]:
+    """Teacher-only image upload (2MB, png/jpg/webp). Returns {url}."""
+    data = await file.read()
+    if len(data) > 2_000_000:
+        raise HTTPException(status_code=413, detail="Image too large (max 2 MB)")
+    ctype = (file.content_type or "").lower()
+    if ctype not in ("image/png", "image/jpeg", "image/webp"):
+        # Fall back to extension check for clients without content-type.
+        name = (file.filename or "").lower()
+        if not (name.endswith(".png") or name.endswith(".jpg") or name.endswith(".jpeg") or name.endswith(".webp")):
+            raise HTTPException(status_code=400, detail="Only png/jpg/webp images allowed")
+    try:
+        from PIL import Image as _Image
+
+        import io as _io
+        import uuid as _uuid
+
+        img = _Image.open(_io.BytesIO(data))
+        img.verify()
+        ext = "webp"
+        uploads = settings.data_dir / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        fname = f"{_uuid.uuid4().hex}.{ext}"
+        # Re-open after verify (verify() closes the parser).
+        img = _Image.open(_io.BytesIO(data))
+        img.thumbnail((1600, 1600))
+        img.save(uploads / fname, format="WEBP", quality=82)
+        return {"url": f"/uploads/{fname}"}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image file")

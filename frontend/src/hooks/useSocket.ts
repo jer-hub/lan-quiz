@@ -9,9 +9,69 @@ function getSocket(): Socket {
       path: "/socket.io",
       transports: ["websocket", "polling"],
       autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 5000,
     });
   }
   return sharedSocket;
+}
+
+const PLAYER_KEY = "lanquiz_join";
+const HOST_KEY = "lanquiz_host";
+
+export type StoredJoin = { pin: string; sid: string; nickname: string; student_code?: string };
+export type StoredHost = { pin: string };
+
+export function saveJoinSession(j: StoredJoin) {
+  try {
+    sessionStorage.setItem(PLAYER_KEY, JSON.stringify(j));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadJoinSession(): StoredJoin | null {
+  try {
+    const raw = sessionStorage.getItem(PLAYER_KEY);
+    return raw ? (JSON.parse(raw) as StoredJoin) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearJoinSession() {
+  try {
+    sessionStorage.removeItem(PLAYER_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function saveHostSession(h: StoredHost) {
+  try {
+    sessionStorage.setItem(HOST_KEY, JSON.stringify(h));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadHostSession(): StoredHost | null {
+  try {
+    const raw = sessionStorage.getItem(HOST_KEY);
+    return raw ? (JSON.parse(raw) as StoredHost) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearHostSession() {
+  try {
+    sessionStorage.removeItem(HOST_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 export function useSocket() {

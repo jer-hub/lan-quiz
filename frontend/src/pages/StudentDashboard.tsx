@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../hooks/useAuth";
+import { useLang } from "../i18n";
 import type { Assignment, AssignmentLive } from "../shared";
 
 function formatDue(iso: string | null): string {
@@ -11,6 +12,7 @@ function formatDue(iso: string | null): string {
 
 export default function StudentDashboard() {
   const { displayName, className } = useAuth();
+  const { t } = useLang();
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [scores, setScores] = useState<Array<Record<string, unknown>>>([]);
   const [showClosed, setShowClosed] = useState(false);
@@ -67,7 +69,7 @@ export default function StudentDashboard() {
 
       <section className="mt-10">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-display text-2xl">Assignments</h2>
+          <h2 className="font-display text-2xl">{t.assignments}</h2>
           <label className="flex items-center gap-2 text-sm font-semibold text-ink/70">
             <input
               type="checkbox"
@@ -83,12 +85,17 @@ export default function StudentDashboard() {
             const statusLabel = a.played
               ? `${a.score_policy === "latest" ? "Latest" : "Best"} score ${a.best_score ?? 0} · ${a.play_count ?? 0} play${(a.play_count ?? 0) === 1 ? "" : "s"}`
               : "Not played";
+            const canHomework =
+              a.status === "open" && !a.is_overdue && (a.max_attempts == null || (a.play_count ?? 0) < a.max_attempts);
             return (
               <li key={a.id} className="rounded-xl border border-sky-200 bg-white px-4 py-3">
                 <p className="font-bold">{a.title}</p>
                 <p className="text-sm text-ink/60">
                   {a.quiz_title} · {a.status}
                   {a.is_overdue && <span className="ml-2 font-bold text-danger">overdue</span>}
+                  <span className="ml-2 rounded bg-sky-100 px-2 py-0.5 text-xs">
+                    {live?.active ? "live" : "homework"}
+                  </span>
                 </p>
                 <p className="mt-1 text-xs text-ink/50">
                   Due: {formatDue(a.due_at)} · {statusLabel}
@@ -103,6 +110,24 @@ export default function StudentDashboard() {
                       Join
                     </Link>
                   </p>
+                )}
+                {canHomework && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void (async () => {
+                        try {
+                          const att = await api.createAttempt(a.id);
+                          window.location.href = `/student/attempt/${att.id}`;
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : "Could not start homework");
+                        }
+                      })()
+                    }
+                    className="mt-2 rounded-lg bg-brand px-3 py-1.5 text-sm font-extrabold text-white"
+                  >
+                    {t.startHomework}
+                  </button>
                 )}
               </li>
             );

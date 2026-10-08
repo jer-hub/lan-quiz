@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -33,23 +34,29 @@ class Base(DeclarativeBase):
     """SQLAlchemy declarative base."""
 
 
+async def _run_alembic_upgrade() -> None:
+    """Run `alembic upgrade head` against the sync SQLite URL."""
+    from alembic import command
+    from alembic.config import Config
+
+    backend_dir = Path(__file__).resolve().parents[1]
+    cfg = Config(str(backend_dir / "alembic.ini"))
+    cfg.set_main_option("script_location", str(backend_dir / "migrations"))
+    # env.py resolves the URL itself (respects ALEMBIC_DATABASE_URL).
+    command.upgrade(cfg, "head")
+
+
 async def init_db() -> None:
-    """Create tables if they do not exist and apply lightweight SQLite column patches."""
+    """Migrate (Alembic) with create_all fallback for fresh/minimal envs."""
     from app import models  # noqa: F401
-    from sqlalchemy import text
 
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # SQLite create_all does not add columns to existing tables
-        for ddl in (
-            "ALTER TABLE assignments ADD COLUMN max_attempts INTEGER",
-            "ALTER TABLE assignments ADD COLUMN score_policy VARCHAR(20) DEFAULT 'best'",
-        ):
-            try:
-                await conn.execute(text(ddl))
-            except Exception:
-                pass  # column already exists
+    try:
+        await _run_alembic_upgrade()
+    except Exception as exc:  # alembic missing or migration error
+        logger.warning("Alembic upgrade failed, falling back to create_all: %s", exc)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
     logger.info("Database initialized at %s", settings.database_url)
 
 

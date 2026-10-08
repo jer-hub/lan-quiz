@@ -33,6 +33,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
-      - run: pip install -r requirements.txt
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
       - run: python -c "import ast, pathlib; [ast.parse(p.read_text(encoding='utf-8')) for p in pathlib.Path('app').rglob('*.py')]; print('syntax-ok')"
+      - run: pytest -q
+        env:
+          JWT_SECRET: test-secret-do-not-use-in-prod
+          ALLOW_DEFAULT_SECRET: "true"

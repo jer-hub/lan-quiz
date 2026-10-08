@@ -13,10 +13,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.analysis import analyze_questions, load_history_questions
 from app.auth import require_student, require_teacher, get_current_principal, TokenPrincipal
+from app.config import settings
 from app.database import get_db
-from app.game_manager import game_manager
-from app.models import Assignment, ClassRoom, GameHistory, GameResult, Quiz, Student, User
+from app.game_manager import calculate_score, game_manager, normalize_short_answer
+from app.models import (
+    Assignment,
+    Attempt,
+    ClassRoom,
+    GameHistory,
+    GameResult,
+    Question,
+    Quiz,
+    Student,
+    User,
+)
 from app.schemas import (
     AssignmentCreate,
     AssignmentLiveOut,
@@ -24,6 +36,9 @@ from app.schemas import (
     AssignmentResultRow,
     AssignmentResultsOut,
     AssignmentUpdate,
+    AttemptAnswerIn,
+    AttemptOut,
+    AttemptSubmitOut,
     GradebookCell,
     GradebookOut,
     GradebookRow,
@@ -31,6 +46,7 @@ from app.schemas import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/assignments", tags=["assignments"])
+attempt_router = APIRouter(prefix="/api/attempts", tags=["attempts"])
 gradebook_router = APIRouter(prefix="/api/gradebook", tags=["gradebook"])
 
 
@@ -104,7 +120,7 @@ def _pick_score(
 async def _student_play_stats(
     db: AsyncSession, student_id: int, assignment_ids: list[int]
 ) -> dict[int, dict]:
-    """Return per-assignment play lists for a student."""
+    """Return per-assignment play lists for a student (live + homework attempts)."""
     if not assignment_ids:
         return {}
     result = await db.execute(
@@ -120,6 +136,16 @@ async def _student_play_stats(
             if row.student_id == student_id:
                 raw[hist.assignment_id].append((row.score, row.rank, hist.played_at))
 
+    att_result = await db.execute(
+        select(Attempt).where(
+            Attempt.student_id == student_id,
+            Attempt.assignment_id.in_(assignment_ids),
+            Attempt.submitted_at.is_not(None),
+        )
+    )
+    for att in att_result.scalars().all():
+        raw[att.assignment_id].append((att.score, 0, att.submitted_at))
+
     return {
         aid: {
             "play_count": len(plays),
@@ -128,6 +154,48 @@ async def _student_play_stats(
         }
         for aid, plays in raw.items()
     }
+
+
+def _score_attempt(questions: list[Question], answers: list[AttemptAnswerIn], base: int) -> tuple[int, int, list[dict]]:
+    """Score homework flat (BASE per correct, no speed bonus). Returns (score, correct_count, details)."""
+    import json as _json
+
+    by_order: dict[int, AttemptAnswerIn] = {}
+    for a in answers:
+        by_order.setdefault(a.order_index, a)
+    total = 0
+    correct_count = 0
+    details: list[dict] = []
+    for i, q in enumerate(questions):
+        a = by_order.get(i)
+        kind = q.kind or "mc"
+        try:
+            options = _json.loads(q.options_json or "[]")
+        except Exception:
+            options = []
+        try:
+            correct_indices = _json.loads(q.correct_indices_json or "[]")
+        except Exception:
+            correct_indices = []
+        correct = False
+        if a is not None:
+            if kind == "short_answer":
+                correct = normalize_short_answer(a.answer_text or "") == normalize_short_answer(
+                    q.answer_text or ""
+                )
+            elif kind == "ordering":
+                # Homework sends full order? Accept single position for MVP parity with live.
+                if a.option_index is not None:
+                    correct = int(a.option_index) in list(correct_indices)
+            else:
+                if a.option_index is not None and 0 <= int(a.option_index) < len(options):
+                    correct = int(a.option_index) in list(correct_indices)
+        pts = base if correct else 0
+        total += pts
+        if correct:
+            correct_count += 1
+        details.append({"order_index": i, "correct": correct, "points": pts})
+    return total, correct_count, details
 
 
 @router.get("", response_model=list[AssignmentOut])
@@ -187,7 +255,7 @@ async def student_my_scores(
         .order_by(GameHistory.played_at.desc())
     )
     rows = result.scalars().all()
-    return [
+    out = [
         {
             "history_id": r.history_id,
             "quiz_title": r.history.quiz_title if r.history else "",
@@ -195,9 +263,30 @@ async def student_my_scores(
             "score": r.score,
             "rank": r.rank,
             "played_at": r.history.played_at if r.history else None,
+            "kind": "live",
         }
         for r in rows
     ]
+    att_result = await db.execute(
+        select(Attempt, Assignment)
+        .join(Assignment, Assignment.id == Attempt.assignment_id)
+        .where(Attempt.student_id == student.id, Attempt.submitted_at.is_not(None))
+        .order_by(Attempt.submitted_at.desc())
+    )
+    for att, asg in att_result.all():
+        out.append(
+            {
+                "attempt_id": att.id,
+                "quiz_title": asg.title,
+                "assignment_id": att.assignment_id,
+                "score": att.score,
+                "rank": None,
+                "played_at": att.submitted_at,
+                "kind": "homework",
+            }
+        )
+    out.sort(key=lambda r: str(r.get("played_at") or ""), reverse=True)
+    return out
 
 
 @router.post("", response_model=AssignmentOut, status_code=201)
@@ -352,6 +441,15 @@ async def assignment_results(
             plays_by_student.setdefault(row.student_id, []).append(
                 (row.score, row.rank, hist.played_at)
             )
+    att_result = await db.execute(
+        select(Attempt).where(
+            Attempt.assignment_id == assignment_id, Attempt.submitted_at.is_not(None)
+        )
+    )
+    for att in att_result.scalars().all():
+        plays_by_student.setdefault(att.student_id, []).append(
+            (att.score, 0, att.submitted_at)
+        )
 
     policy = assignment.score_policy or "best"
     rows: list[AssignmentResultRow] = []
@@ -378,6 +476,42 @@ async def assignment_results(
         max_attempts=assignment.max_attempts,
         rows=rows,
     )
+
+
+@router.get("/{assignment_id}/analysis")
+async def assignment_analysis(
+    assignment_id: int,
+    teacher: User = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    assignment = await _load_teacher_assignment(db, assignment_id, teacher)
+    hist_result = await db.execute(
+        select(GameHistory).where(GameHistory.assignment_id == assignment_id)
+    )
+    # Aggregate per question_index across plays.
+    buckets: dict[int, dict] = {}
+    for hist in hist_result.scalars().all():
+        for q in load_history_questions(hist):
+            idx = int(q.get("question_index", 0))
+            b = buckets.setdefault(
+                idx,
+                {
+                    "question_index": idx,
+                    "question_id": q.get("question_id"),
+                    "text": q.get("text", ""),
+                    "kind": q.get("kind", "mc"),
+                    "options": q.get("options", []),
+                    "correct_indices": q.get("correct_indices", []),
+                    "results": [],
+                },
+            )
+            b["results"].extend(q.get("results", []) or [])
+    ordered = [buckets[k] for k in sorted(buckets)]
+    return {
+        "assignment_id": assignment.id,
+        "title": assignment.title,
+        "analysis": analyze_questions(ordered),
+    }
 
 
 @router.get("/{assignment_id}/live", response_model=AssignmentLiveOut)
@@ -416,6 +550,176 @@ async def assignment_live(
     )
 
 
+def _sanitized_questions(quiz: Quiz) -> list[dict]:
+    import json as _json
+
+    out = []
+    for i, q in enumerate(sorted(quiz.questions, key=lambda x: x.order_index)):
+        try:
+            options = _json.loads(q.options_json or "[]")
+        except Exception:
+            options = []
+        out.append(
+            {
+                "order_index": i,
+                "question_id": q.id,
+                "text": q.text,
+                "image": q.image,
+                "options": options,
+                "time_limit": q.time_limit,
+                "kind": q.kind or "mc",
+            }
+        )
+    return out
+
+
+async def _load_student_assignment(
+    db: AsyncSession, assignment_id: int, student: Student
+) -> Assignment:
+    result = await db.execute(
+        select(Assignment)
+        .options(
+            selectinload(Assignment.classroom),
+            selectinload(Assignment.quiz).selectinload(Quiz.questions),
+        )
+        .where(Assignment.id == assignment_id, Assignment.class_id == student.class_id)
+    )
+    assignment = result.scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    return assignment
+
+
+def _ensure_attempt_allowed(assignment: Assignment, play_count: int) -> None:
+    if assignment.status != "open":
+        raise HTTPException(status_code=403, detail="Assignment is closed")
+    if assignment.due_at is not None:
+        from datetime import timezone as _tz
+
+        due = assignment.due_at
+        aware = due if due.tzinfo else due.replace(tzinfo=_tz.utc)
+        if aware < datetime.now(_tz.utc):
+            raise HTTPException(status_code=403, detail="Assignment is past due")
+    if assignment.max_attempts is not None and play_count >= assignment.max_attempts:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Max attempts reached ({assignment.max_attempts})",
+        )
+
+
+@router.post("/{assignment_id}/attempts", response_model=AttemptOut, status_code=201)
+async def create_attempt(
+    assignment_id: int,
+    student: Student = Depends(require_student),
+    db: AsyncSession = Depends(get_db),
+) -> AttemptOut:
+    import json as _json
+
+    assignment = await _load_student_assignment(db, assignment_id, student)
+    stats = await _student_play_stats(db, student.id, [assignment.id])
+    play_count = int((stats.get(assignment.id) or {}).get("play_count") or 0)
+    _ensure_attempt_allowed(assignment, play_count)
+    attempt = Attempt(
+        assignment_id=assignment.id, student_id=student.id, score=0, answers_json="[]"
+    )
+    db.add(attempt)
+    await db.commit()
+    await db.refresh(attempt)
+    return AttemptOut(
+        id=attempt.id,
+        assignment_id=attempt.assignment_id,
+        student_id=attempt.student_id,
+        score=attempt.score,
+        answers=[],
+        started_at=attempt.started_at,
+        submitted_at=attempt.submitted_at,
+    )
+
+
+@attempt_router.get("/{attempt_id}", response_model=dict)
+async def get_attempt(
+    attempt_id: int,
+    student: Student = Depends(require_student),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    import json as _json
+
+    attempt = await db.get(Attempt, attempt_id)
+    if not attempt or attempt.student_id != student.id:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+    assignment = await _load_student_assignment(db, attempt.assignment_id, student)
+    try:
+        answers = _json.loads(attempt.answers_json or "[]")
+    except Exception:
+        answers = []
+    return {
+        "attempt": AttemptOut(
+            id=attempt.id,
+            assignment_id=attempt.assignment_id,
+            student_id=attempt.student_id,
+            score=attempt.score,
+            answers=answers,
+            started_at=attempt.started_at,
+            submitted_at=attempt.submitted_at,
+        ).model_dump(),
+        "assignment": _assignment_out(assignment).model_dump(),
+        "quiz": {
+            "id": assignment.quiz.id,
+            "title": assignment.quiz.title,
+            "questions": _sanitized_questions(assignment.quiz),
+        },
+    }
+
+
+@attempt_router.post("/{attempt_id}/submit", response_model=AttemptSubmitOut)
+async def submit_attempt(
+    attempt_id: int,
+    payload: dict,
+    student: Student = Depends(require_student),
+    db: AsyncSession = Depends(get_db),
+) -> AttemptSubmitOut:
+    import json as _json
+
+    attempt = await db.get(Attempt, attempt_id)
+    if not attempt or attempt.student_id != student.id:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+    if attempt.submitted_at is not None:
+        raise HTTPException(status_code=403, detail="Attempt already submitted")
+    assignment = await _load_student_assignment(db, attempt.assignment_id, student)
+    stats = await _student_play_stats(db, student.id, [assignment.id])
+    # Exclude this in-progress attempt (not yet submitted, not counted).
+    play_count = int((stats.get(assignment.id) or {}).get("play_count") or 0)
+    _ensure_attempt_allowed(assignment, play_count)
+
+    raw_answers = payload.get("answers") or []
+    answers = []
+    for a in raw_answers:
+        if isinstance(a, dict):
+            answers.append(
+                AttemptAnswerIn(
+                    question_id=a.get("question_id"),
+                    order_index=int(a.get("order_index", 0)),
+                    option_index=a.get("option_index"),
+                    answer_text=a.get("answer_text"),
+                )
+            )
+    questions = sorted(assignment.quiz.questions, key=lambda x: x.order_index)
+    total, correct_count, _ = _score_attempt(questions, answers, settings.score_base)
+    attempt.score = total
+    attempt.answers_json = _json.dumps([a.model_dump() for a in answers], ensure_ascii=False)
+    attempt.submitted_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(attempt)
+    return AttemptSubmitOut(
+        id=attempt.id,
+        assignment_id=attempt.assignment_id,
+        score=attempt.score,
+        total=len(questions) * settings.score_base,
+        correct_count=correct_count,
+        submitted_at=attempt.submitted_at,
+    )
+
+
 async def _build_gradebook(db: AsyncSession, classroom: ClassRoom) -> GradebookOut:
     assign_result = await db.execute(
         select(Assignment)
@@ -428,7 +732,7 @@ async def _build_gradebook(db: AsyncSession, classroom: ClassRoom) -> GradebookO
 
     students = sorted(classroom.students, key=lambda s: s.display_name.lower())
 
-    # Collect all plays then pick by policy
+    # Collect all plays then pick by policy (live + homework attempts)
     plays: dict[tuple[int, int], list[tuple[int, int, datetime | None]]] = {}
     hist_result = await db.execute(
         select(GameHistory)
@@ -443,6 +747,18 @@ async def _build_gradebook(db: AsyncSession, classroom: ClassRoom) -> GradebookO
                 continue
             key = (row.student_id, hist.assignment_id)
             plays.setdefault(key, []).append((row.score, row.rank, hist.played_at))
+    assignment_ids = [a.id for a in assignments]
+    if assignment_ids:
+        att_result = await db.execute(
+            select(Attempt).where(
+                Attempt.assignment_id.in_(assignment_ids),
+                Attempt.submitted_at.is_not(None),
+            )
+        )
+        for att in att_result.scalars().all():
+            plays.setdefault((att.student_id, att.assignment_id), []).append(
+                (att.score, 0, att.submitted_at)
+            )
 
     scores: dict[tuple[int, int], tuple[int, int, datetime | None]] = {}
     for key, plist in plays.items():
