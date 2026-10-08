@@ -44,20 +44,22 @@ Other phones/laptops need your computer’s Wi‑Fi address (not `localhost`).
 git clone https://github.com/YOUR_USER/lan-quiz.git
 cd lan-quiz
 cp .env.example .env
-# Edit .env: set HOST_IP to your LAN IP, change JWT_SECRET
+# Edit .env: set HOST_IP to your LAN IP, set a strong JWT_SECRET
+# (boot refuses the default secret unless ALLOW_DEFAULT_SECRET=true)
 docker compose up --build
 ```
 
 Open **http://localhost:8000** on the host, or **http://YOUR_LAN_IP:8000** on other devices.
+If host port 8000 is taken: `PORT=8001 docker compose up --build` (container stays on 8000).
 
 ### 3. First classroom session
 
-1. **Teacher login** → register an account  
-2. Create a quiz (or import [`samples/sample-quiz.json`](samples/sample-quiz.json))  
-3. **Classes** → create a class (note the **join code**)  
-4. Add students (`display_name` + `student_code`; default password = student code) or CSV import  
-5. **Assignments** → assign quiz → optional due date / max attempts → **Host live game**  
-6. Students open `/play` with PIN + **student code** (or use the live PIN on their dashboard)  
+1. **Teacher login** → register an account (or bulk-import via host dashboard CSV)
+2. Create a quiz (or import [`samples/sample-quiz.json`](samples/sample-quiz.json))
+3. **Classes** → create a class (note the **join code**)
+4. Add students manually or via CSV import (`samples/sample-roster.csv`)
+5. **Assignments** → assign quiz → optional due date / max attempts → **Host live game**
+6. Students open `/play` with PIN + **student code** (or use the live PIN on their dashboard)
 7. Review **Gradebook** or assignment **Results** (CSV export available)
 
 **Casual party:** from a quiz, **Start game** without an assignment — guests join with PIN + nickname.
@@ -66,14 +68,13 @@ Open **http://localhost:8000** on the host, or **http://YOUR_LAN_IP:8000** on ot
 
 ## How assignments work (students)
 
-Assignments are **live class games**, not self-paced homework.
+Assignments support **live class games** and **homework** (self-paced, no host).
 
-1. Teacher hosts the assignment → PIN appears  
-2. Student joins `/play` with PIN + roster **student code**  
-3. Student answers questions in real time  
-4. Scores roll into the assignment / gradebook  
+1. Teacher hosts the assignment → PIN appears (live), or students press **Start homework**
+2. Student joins `/play` with PIN + roster **student code** (live) or plays solo (homework)
+3. Scores roll into the assignment / gradebook under `best` / `latest` policy
 
-Students **cannot** start the quiz alone from the dashboard. Details: [docs/CLASSROOM.md](docs/CLASSROOM.md).
+Details: [docs/CLASSROOM.md](docs/CLASSROOM.md).
 
 ---
 
@@ -109,13 +110,13 @@ Clamped to `[BASE/2, BASE]` (default BASE = 1000 → 500–1000). Wrong answers 
 cd backend
 python -m venv .venv
 # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 set DATA_DIR=..\data
 set HOST_IP=localhost
-set JWT_SECRET=dev-secret
+set ALLOW_DEFAULT_SECRET=true
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-# Frontend (proxies API + Socket.IO → :8000)
+# Frontend (proxies API + Socket.IO → :8000, or BACKEND_PORT)
 cd frontend
 npm install
 npm run dev
