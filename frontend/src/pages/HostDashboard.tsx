@@ -8,6 +8,11 @@ export default function HostDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const fileRef = useRef<HTMLInputElement>(null);
+  const teacherFileRef = useRef<HTMLInputElement>(null);
+  const [teacherReport, setTeacherReport] = useState<{
+    added: number;
+    skipped: Array<{ row: number; reason: string }>;
+  } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -68,6 +73,31 @@ export default function HostDashboard() {
     }
   };
 
+  const onImportTeachers = async (file: File) => {
+    try {
+      setTeacherReport(null);
+      const res = await api.importTeachers(file);
+      setTeacherReport({ added: res.added.length, skipped: res.skipped });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Teacher import failed");
+    }
+  };
+
+  const downloadTeacherTemplate = () => {
+    const blob = new Blob(
+      [
+        "username,password,first_name,last_name,email,school_id,class_section\njsmith,,Jane,Smith,jane@school.edu,T001,\n",
+      ],
+      { type: "text/csv" },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "teachers-template.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
@@ -100,8 +130,54 @@ export default function HostDashboard() {
           >
             New quiz
           </Link>
+          <button
+            type="button"
+            onClick={() => teacherFileRef.current?.click()}
+            className="rounded-xl border border-sky-300 bg-white px-4 py-2.5 font-bold text-ink transition hover:bg-sky-50"
+          >
+            Import teachers
+          </button>
+          <input
+            ref={teacherFileRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void onImportTeachers(f);
+              e.target.value = "";
+            }}
+          />
         </div>
       </div>
+
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-ink/60">
+        <span>
+          Teacher CSV: same headers as roster (
+          <span className="font-mono">username,…,class_section</span>) — only
+          username/password are used.
+        </span>
+        <button type="button" onClick={downloadTeacherTemplate} className="font-bold underline">
+          Template
+        </button>
+      </div>
+      {teacherReport && (
+        <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm">
+          <p className="font-bold">
+            Imported {teacherReport.added} teacher{teacherReport.added === 1 ? "" : "s"}
+            {teacherReport.skipped.length > 0 && ` · ${teacherReport.skipped.length} skipped`}
+          </p>
+          {teacherReport.skipped.length > 0 && (
+            <ul className="mt-2 space-y-1">
+              {teacherReport.skipped.slice(0, 10).map((s, i) => (
+                <li key={i} className="text-ink/70">
+                  Row {s.row}: {s.reason}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-800" role="alert">

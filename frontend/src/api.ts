@@ -98,6 +98,14 @@ export const api = {
       body: JSON.stringify(body),
     }),
   me: () => request<MeResponse>("/api/auth/me"),
+  importTeachers: async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<{
+      added: Array<{ user_id: number | null; username: string }>;
+      skipped: Array<{ row: number; reason: string }>;
+    }>("/api/auth/teachers/import", { method: "POST", body: fd, headers: {} });
+  },
 
   listQuizzes: () => request<QuizSummary[]>("/api/quizzes"),
   getQuiz: (id: number) => request<Quiz>(`/api/quizzes/${id}`),

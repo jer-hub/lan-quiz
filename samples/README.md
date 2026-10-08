@@ -12,6 +12,12 @@ Import these from the teacher UI (**Import**) or via `POST /api/quizzes/import` 
 [`sample-roster.csv`](sample-roster.csv) — class import with required headers in order:
 `username,password,first_name,last_name,email,school_id,class_section`.
 
+## Sample teachers
+
+[`sample-teachers.csv`](sample-teachers.csv) — same headers, teacher-only
+`POST /api/auth/teachers/import` (logged-in teacher). Only
+`username`/`password` are used; blank password defaults to username.
+
 ## JSON shape
 
 ```json

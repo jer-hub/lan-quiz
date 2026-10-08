@@ -5,6 +5,7 @@
 | Secret | Where | Guidance |
 |--------|--------|----------|
 | `JWT_SECRET` | `.env` on the host | Change from the example before any shared/classroom deploy. App refuses to boot with the default unless `ALLOW_DEFAULT_SECRET=true` (local dev only) |
+| Teacher/student passwords | SQLite (bcrypt) | Roster default password = username; teacher import: blank password defaults to username (min 6). First teacher self-registers, then bulk-imports via host dashboard |
 | `HOST_IP` | `.env` / compose | Must be your LAN IP (e.g. `192.168.1.42`) for QR/join URLs. `localhost` triggers a startup warning and `GET /api/health → host_ip_is_loopback:true` |
 | Teacher/student passwords | SQLite (bcrypt) | Default student password = student code — change for real classes |
 | AI API keys | Browser `localStorage` only | Never commit keys; LanQuiz does not store them in the DB |
