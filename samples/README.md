@@ -7,6 +7,11 @@ Import these from the teacher UI (**Import**) or via `POST /api/quizzes/import` 
 | [`sample-quiz.json`](sample-quiz.json) | Short demo (LAN / Socket.IO / true-false / multi-correct) |
 | [`friday-night-trivia.json`](friday-night-trivia.json) | Longer party-style trivia set |
 
+## Sample roster
+
+[`sample-roster.csv`](sample-roster.csv) — class import with required headers in order:
+`username,password,first_name,last_name,email,school_id,class_section`.
+
 ## JSON shape
 
 ```json

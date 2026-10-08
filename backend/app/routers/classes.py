@@ -216,6 +216,55 @@ async def delete_student(
     return Response(status_code=204)
 
 
+ROSTER_HEADERS = [
+    "username",
+    "password",
+    "first_name",
+    "last_name",
+    "email",
+    "school_id",
+    "class_section",
+]
+
+
+def parse_roster_csv(raw: str) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """Validate headers (exact sequence) and map rows.
+
+    Mapping: student_code=username (upper), password=password or username,
+    display_name="first_name last_name". email/school_id/class_section ignored.
+    Returns (valid_rows, skipped) with 1-based file row numbers.
+    """
+    reader = csv.DictReader(io.StringIO(raw))
+    if not reader.fieldnames:
+        raise ValueError("Empty CSV")
+    headers = [h.strip() if h else "" for h in reader.fieldnames]
+    if headers != ROSTER_HEADERS:
+        raise ValueError(
+            "CSV must have headers in order: " + ",".join(ROSTER_HEADERS)
+        )
+    valid: list[dict[str, str]] = []
+    skipped: list[dict[str, Any]] = []
+    for lineno, row in enumerate(reader, start=2):
+        username = (row.get("username") or "").strip()
+        password = (row.get("password") or "").strip()
+        first = (row.get("first_name") or "").strip()
+        last = (row.get("last_name") or "").strip()
+        name = f"{first} {last}".strip()
+        code = username.upper()
+        if not name or not code:
+            skipped.append({"row": lineno, "reason": "missing username or name"})
+            continue
+        valid.append(
+            {
+                "display_name": name,
+                "student_code": code,
+                "password": password or code,
+                "lineno": lineno,
+            }
+        )
+    return valid, skipped
+
+
 @router.post("/{class_id}/students/import")
 async def import_roster_csv(
     class_id: int,
@@ -223,28 +272,22 @@ async def import_roster_csv(
     teacher: User = Depends(require_teacher),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """CSV columns: display_name,student_code[,password]. Returns {added, skipped}."""
-    from fastapi import status as _status
-
+    """CSV headers (in order): username,password,first_name,last_name,email,school_id,class_section."""
     classroom = await _load_class(db, class_id, teacher)
     try:
         raw = (await file.read()).decode("utf-8-sig")
     except Exception:
         raise HTTPException(status_code=400, detail="Could not read CSV (use UTF-8)")
-    reader = csv.DictReader(io.StringIO(raw))
-    if not reader.fieldnames:
-        raise HTTPException(status_code=400, detail="Empty CSV")
+    try:
+        rows, skipped = parse_roster_csv(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     created: list[Student] = []
-    skipped: list[dict[str, Any]] = []
     existing_codes = {s.student_code for s in classroom.students}
     seen_in_file: set[str] = set()
-    for lineno, row in enumerate(reader, start=2):
-        name = (row.get("display_name") or row.get("name") or "").strip()
-        code = (row.get("student_code") or row.get("code") or "").strip().upper()
-        password = (row.get("password") or code).strip()
-        if not name or not code:
-            skipped.append({"row": lineno, "reason": "missing display_name or student_code"})
-            continue
+    for row in rows:
+        lineno = row["lineno"]
+        code = row["student_code"]
         if code in seen_in_file:
             skipped.append({"row": lineno, "reason": f"duplicate code {code} in file"})
             continue
@@ -254,9 +297,9 @@ async def import_roster_csv(
             continue
         student = Student(
             class_id=classroom.id,
-            display_name=name,
+            display_name=row["display_name"],
             student_code=code,
-            password_hash=hash_password(password),
+            password_hash=hash_password(row["password"]),
         )
         db.add(student)
         created.append(student)
@@ -270,5 +313,5 @@ async def import_roster_csv(
         await db.refresh(s)
     return {
         "added": [_student_out(s).model_dump() for s in created],
-        "skipped": skipped,
+        "skipped": sorted(skipped, key=lambda s: s["row"]),
     }

@@ -66,9 +66,12 @@ export default function ClassDetailPage() {
   };
 
   const downloadTemplate = () => {
-    const blob = new Blob(["display_name,student_code,password\nAda Lovelace,ADA01,\n"], {
-      type: "text/csv",
-    });
+    const blob = new Blob(
+      [
+        "username,password,first_name,last_name,email,school_id,class_section\nada01,,Ada,Lovelace,ada@school.edu,S1001,7-A\n",
+      ],
+      { type: "text/csv" },
+    );
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -150,7 +153,8 @@ export default function ClassDetailPage() {
           />
         </form>
         <p className="mt-2 text-xs text-ink/50">
-          CSV headers: display_name,student_code[,password] — default password = student_code
+          CSV headers in order: username,password,first_name,last_name,email,school_id,class_section
+          — code = username, name = first + last, blank password defaults to username
         </p>
         {importReport && (
           <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm">

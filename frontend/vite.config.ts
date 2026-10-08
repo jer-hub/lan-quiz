@@ -43,9 +43,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://127.0.0.1:8000",
+      "/api": `http://127.0.0.1:${process.env.BACKEND_PORT || 8000}`,
       "/socket.io": {
-        target: "http://127.0.0.1:8000",
+        target: `http://127.0.0.1:${process.env.BACKEND_PORT || 8000}`,
         ws: true,
       },
     },
