@@ -182,7 +182,7 @@ class StudentCreate(BaseModel):
 
 class StudentUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=120)
-    password: str | None = Field(default=None, min_length=1, max_length=128)
+    password: str | None = Field(default=None, min_length=6, max_length=128)
 
 
 class StudentOut(BaseModel):
