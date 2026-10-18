@@ -40,3 +40,20 @@ def test_missing_name_skipped_with_row_number():
     rows, skipped = parse_roster_csv(raw)
     assert rows == []
     assert skipped == [{"row": 2, "reason": "missing username or name"}]
+
+
+def _roster_csv(data_rows: int) -> str:
+    lines = ["username,password,first_name,last_name,email,school_id,class_section"]
+    lines += [f"s{i:04d},,First{i},Last{i},,S,7-A" for i in range(data_rows)]
+    return "\n".join(lines) + "\n"
+
+
+def test_roster_500_data_rows_accepted():
+    rows, skipped = parse_roster_csv(_roster_csv(500))
+    assert len(rows) == 500
+    assert skipped == []
+
+
+def test_roster_501_data_rows_refused_with_clear_message():
+    with pytest.raises(ValueError, match="500"):
+        parse_roster_csv(_roster_csv(501))

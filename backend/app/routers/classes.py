@@ -216,6 +216,8 @@ async def delete_student(
     return Response(status_code=204)
 
 
+MAX_CSV_ROWS = 500  # data rows per roster or teacher CSV import
+
 ROSTER_HEADERS = [
     "username",
     "password",
@@ -242,9 +244,12 @@ def parse_roster_csv(raw: str) -> tuple[list[dict[str, str]], list[dict[str, Any
         raise ValueError(
             "CSV must have headers in order: " + ",".join(ROSTER_HEADERS)
         )
+    data_rows = list(reader)
+    if len(data_rows) > MAX_CSV_ROWS:
+        raise ValueError(f"CSV has more than {MAX_CSV_ROWS} data rows (max {MAX_CSV_ROWS})")
     valid: list[dict[str, str]] = []
     skipped: list[dict[str, Any]] = []
-    for lineno, row in enumerate(reader, start=2):
+    for lineno, row in enumerate(data_rows, start=2):
         username = (row.get("username") or "").strip()
         password = (row.get("password") or "").strip()
         first = (row.get("first_name") or "").strip()

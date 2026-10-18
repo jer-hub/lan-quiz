@@ -155,7 +155,7 @@ async def import_teachers_csv(
     username,password,first_name,last_name,email,school_id,class_section.
     Only username/password are used (username lowercased, min 3 chars;
     password defaults to username, min 6 chars)."""
-    from app.routers.classes import ROSTER_HEADERS
+    from app.routers.classes import MAX_CSV_ROWS, ROSTER_HEADERS
 
     try:
         raw = (await file.read()).decode("utf-8-sig")
@@ -170,12 +170,18 @@ async def import_teachers_csv(
             status_code=400,
             detail="CSV must have headers in order: " + ",".join(ROSTER_HEADERS),
         )
+    data_rows = list(reader)
+    if len(data_rows) > MAX_CSV_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV has more than {MAX_CSV_ROWS} data rows (max {MAX_CSV_ROWS})",
+        )
     existing_result = await db.execute(select(User.username))
     existing = set(existing_result.scalars().all())
     seen_in_file: set[str] = set()
     added: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
-    for lineno, row in enumerate(reader, start=2):
+    for lineno, row in enumerate(data_rows, start=2):
         try:
             uname, pwd = validate_teacher_import_row(
                 row.get("username") or "", row.get("password") or ""

@@ -75,6 +75,8 @@ async def lifespan(_app: FastAPI):
 fastapi_app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 _cors_wildcard = settings.cors_origins.strip() == "*"
+# Added before CORS so CORS wraps it and the 413 still carries CORS headers.
+fastapi_app.add_middleware(quizzes.ImageUploadSizeLimit)
 fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if _cors_wildcard else settings.cors_origin_list,
