@@ -1,125 +1,51 @@
-# LanQuiz Roadmap — v1.1 to v1.4
+# LanQuiz Roadmap
 
-> Generated 2026-10-08. Source: codebase review of `backend/app/*`, `frontend/src/*`, `docker-compose.yml`, `docs/*`.
+> Rewritten after a code audit. A box is checked only when the code path exists in the repo. Anything not verified stays open.
 > Constraint: single Docker image, LAN-first, SQLite stays.
 
-## Milestones
+## Shipped (v1.0 – v1.4)
 
-- [ ] **v1.1-stable (Phase 0+1)** — Issues #1-6 — Don't lose games
-- [ ] **v1.2-gameplay (Phase 2)** — Issues #7-10 — Fairness + new modes
-- [ ] **v1.3-insight (Phase 3)** — Issues #11-13 — Teacher insight
-- [ ] **v1.4-lan (Phase 4)** — Issues #14-15 — Offline + QR polish
+- [x] Fail-fast on default `JWT_SECRET` (`backend/app/config.py`, `ensure_secure`)
+- [x] Localhost `HOST_IP` warning at startup (`backend/app/main.py`)
+- [x] Alembic migrations `0001`–`0005` (`backend/migrations/versions/`)
+- [x] Pytest suite and CI workflow (`backend/tests/`, `.github/workflows/ci.yml`)
+- [x] Live game snapshots restored on restart (`backend/app/session_store.py`, `ActiveGame`)
+- [x] Server-side reclaim of a disconnected player's slot within the grace period (`game_manager.join_game`)
+- [x] Per-player option shuffle (`backend/app/utils/shuffle.py`)
+- [x] Question kinds: multiple choice, true/false, ordering, short answer
+- [x] Team mode (`team_mode`, `teams`, team scores)
+- [x] Self-paced homework attempts (`Attempt`, `AttemptPage.tsx`)
+- [x] Item analysis for past games (`backend/app/analysis.py`, `GET /api/games/history/{id}/analysis`)
+- [x] Image uploads with Pillow verification (`POST /api/quizzes/upload-image`)
+- [x] Roster CSV import with skipped-row report
+- [x] Vietnamese / English UI toggle (`frontend/src/i18n.ts`)
+- [x] PWA setup (`vite-plugin-pwa` in `frontend/vite.config.ts`)
 
-Order: `1,2,3` parallel -> `4` -> `5` -> `6` -> `7` -> `8` -> `9+10` parallel -> `11-15` any order.
+## Not shipped from the old v1.1–v1.4 plan
 
----
+- [ ] Rate limiting on auth and join endpoints. No limiter library or 429 path exists.
+- [ ] Nickname blocklist.
+- [ ] Client-side auto-rejoin with a "Reconnecting…" banner. Server reclaim exists; confirm the client re-emits `join_game` before checking this off.
+- [ ] Offline join form and backoff in `useSocket.ts`. Confirm before checking off.
 
-## Phase 0 — Hardening (blocks all)
+## v1.5 — Hardening follow-ups
 
-### #1 [P0] Fail-fast on default JWT_SECRET + localhost HOST_IP `area: config`
-- [ ] `backend/app/config.py:23` — `model_validator`: abort if `jwt_secret` still default in prod
-- [ ] `backend/app/main.py:31-41` — warn if `host_ip in [localhost,127.0.0.1]`
-- [ ] `docker-compose.yml:15`, `.env.example:13` — update comments
-- [ ] `SECURITY.md` — trusted-LAN note
-- Accept: bad secret exits non-zero; localhost warns.
+Items from the security review (2026-10). Each needs a regression test.
 
-### #2 [P0] Alembic baseline, fix FKs/cascades `area: db`
-- [ ] Add `alembic.ini` + `backend/migrations/` baseline `0001` from `backend/app/models.py`
-- [ ] Remove `try/except ALTER` in `backend/app/database.py`
-- [ ] `GameHistory.quiz_id/teacher_id/class_id` -> FK `SET NULL`; `Assignment.results` cascade delete-orphan
-- [ ] `Dockerfile` runs `alembic upgrade head` before uvicorn
-- Accept: fresh + v1.0 DB both boot.
+- [ ] **Student join identity.** Add a per-class setting "require student password to join", off by default. Classroom joins check the password when the setting is on. (Review item 5)
+- [ ] **Custom AI provider URL.** Require `https`. Block loopback, link-local and private addresses unless `ALLOW_PRIVATE_AI_PROVIDERS=true`, which local models such as Ollama need. Stop echoing provider error bodies beyond a short fixed message. (Review item 6)
+- [ ] **Student passwords.** Enforce a minimum length of 6 on roster import, matching teacher import. When a password is omitted, generate a random initial password and return it once in the import response. Stop defaulting to the student code. (Review item 7)
+- [ ] **Teacher registration.** Disable public self-registration once a teacher account exists. Enable it again only with `ALLOW_TEACHER_REGISTRATION=true`. (Review item 8)
+- [ ] **Upload limits.** Enforce the 2 MB image limit while reading the body. Cap roster and teacher CSV import at a fixed row count. (Review low item 11)
+- [ ] **Secure join codes.** Generate class join codes and PINs with `secrets`, not `random`. (Review low item 12)
 
-### #3 [P0] Smoke tests + CI `area: tests`
-- [ ] `test_scoring.py` — `calculate_score` bounds `[BASE//2,BASE]`, wrong=0
-- [ ] `test_schemas.py` — rejects 1/7 options, bad `correct_indices`, `time_limit` 5-120
-- [ ] `test_quiz_routes.py` — `POST /import` not shadowed by `GET /{quiz_id}`
-- [ ] `test_lobby.py` — 100-cap, nickname dedup, single-session code
-- [ ] `test_gradebook.py` — `best` vs `latest`
-- [ ] `.github/workflows/ci.yml` — add pytest + build
-- Accept: CI green.
+## v1.6 — Teacher experience
 
-## Phase 1 — Don't lose games
-
-### #4 [P1] Persist GameSession `depends: #2`
-- [ ] `models.py` — new `ActiveGame{pin PK, payload_json}`
-- [ ] `game_manager.py` — `save_snapshot()` on create/join/start/next; `load_snapshots()` in `lifespan()`
-- [ ] `socket_handlers.py` — hook save; delete on `game_ended`
-- [ ] `HostGame.tsx` — "Restored session" state
-- Accept: `docker restart` keeps PIN + roster.
-
-### #5 [P1] Auto-rejoin on reconnect
-- [ ] `hooks/useSocket.ts` — persist `{pin,sid,nickname,student_code}` to `sessionStorage`
-- [ ] `PlayPage.tsx` — re-emit `join_game{rejoin_sid}` on reconnect + "Reconnecting..." banner
-- [ ] `game_manager.py:join_game` — reclaim slot <60s, keep score
-- Accept: refresh keeps score, no ghost.
-
-### #6 [P1] Rate-limit + nickname filter
-- [ ] Add `slowapi`; limit `auth/*` 10/min, `join_game` 20/min
-- [ ] `game_manager.py` — blocklist, `error{message}`
-- [ ] `PlayPage.tsx` — error toast
-- Accept: flood -> 429.
-
-## Phase 2 — Gameplay
-
-### #7 Per-player shuffle
-- [ ] Extract `_shuffle_options` from `routers/ai.py` -> `utils/shuffle.py`
-- [ ] `GameSession.option_map[sid]`; per-sid `question_started`; translate in `submit_answer`
-- Accept: different order, correct scoring.
-
-### #8 New question kinds `depends: #2`
-- [ ] `Question{kind, answer_text}` + Alembic `0002`; `schemas.py` validators
-- [ ] `routers/quizzes.py` import compat (`kind=mc` default); update `samples/`
-- [ ] `shared.ts:QuestionKind`; `QuizEditor.tsx` kind editor; `PlayPage.tsx` + `HostGame.tsx` render
-- [ ] `calculate_score` short-answer normalize
-- Accept: mc/tf/ordering/short all play; old JSON loads.
-
-### #9 Team mode
-- [ ] `Player.team`; `create_game{team_mode,teams}`; lobby/leaderboard/end by team
-- [ ] `HostGame.tsx` team lobby + `Podium.tsx`; `PlayPage.tsx` picker
-- Accept: 6 teams correct winner.
-
-### #10 Self-paced homework (largest)
-- [ ] `Attempt{assignment_id,student_id,score,answers_json}` + schemas
-- [ ] `routers/assignments.py` — `POST /{id}/attempts`, `POST /attempts/{id}/submit`, include in `_pick_score/_build_gradebook`
-- [ ] `api.ts:createAttempt/submitAttempt`; new `AttemptPage.tsx`; `StudentDashboard.tsx` + `AssignmentsPage.tsx:458` badges
-- Accept: solo attempt without host; gradebook unified.
-
-## Phase 3 — Insight
-
-### #11 Item analysis
-- [ ] `routers/games.py:GET /history/{id}/analysis` from `results_json`
-- [ ] `assignments.py:GET /{id}/results` aggregate; `api.ts`, `shared.ts:QuestionAnalysis`
-- [ ] `HistoryPage.tsx` + `ClassDetailPage.tsx` % correct + histogram + CSV column
-- Accept: "Q3 22% correct" visible.
-
-### #12 Uploads dir `depends: #2`
-- [ ] `main.py` mount `/uploads` from `DATA_DIR/uploads`
-- [ ] `routers/quizzes.py:POST /upload-image` (Pillow verify, 2MB, uuid)
-- [ ] `QuizEditor.tsx` picker -> url; `Play/Game.tsx` render `url|data:`
-- Accept: 10-image quiz <100KB JSON.
-
-### #13 Roster + vi/en
-- [ ] `routers/classes.py:import_roster` -> `{added, skipped:[{row,reason}]}` + `utf-8-sig`
-- [ ] `ClassDetailPage.tsx` template + error table; `ClassesPage.tsx` onboarding
-- [ ] `i18n.ts` vi/en + `App.tsx` toggle, `Home/Play/StudentDashboard` first
-- Accept: row 14 error precise; toggle persists.
-
-## Phase 4 — LAN polish
-
-### #14 PWA + offline play
-- [ ] `vite-plugin-pwa` in `vite.config.ts`; manifest, `sw.js`
-- [ ] `index.html` meta/icons; `PlayPage.tsx` offline banner; `useSocket.ts` backoff
-- Accept: Lighthouse PWA pass; offline join form renders.
-
-### #15 HOST_IP + QR polish `pairs: #1`
-- [ ] `/api/health` -> `{public_base_url, host_ip_is_loopback}`; `utils/qr.py` uses base_url
-- [ ] `HostGame.tsx` large QR + copy + `n/100` + localhost warning; `HomePage.tsx` host/join cards
-- [ ] `docs/CLASSROOM.md` LAN checklist
-- Accept: QR -> `/play?pin=XXXX`; wrong IP warns.
-
----
+- [ ] **Ordering reveal.** After an ordering question, show the canonical order numbered 1 to n, and highlight the student's submitted sequence separately. The current reveal marks every option green, which hides the sequence that scored.
+- [ ] Rate limiting and nickname blocklist (carried over from above).
+- [ ] Client-side auto-rejoin, if the audit shows it is missing.
+- [ ] Gradebook: show live and homework attempts side by side per student.
 
 ## Board suggestion
 
-Now: #1-6 | Next: #7-10 | Later: #11-15
+Now: v1.5 hardening | Next: v1.6 teacher experience
