@@ -72,7 +72,7 @@ async def test_add_student_short_password_refused(env):
         json={"display_name": "Ada", "student_code": "ada01", "password": "a" * 5},
     )
     assert res.status_code in (400, 422)
-    assert (await _login(c, "ADA01", "abc12")).status_code == 401
+    assert (await _login(c, "ADA01", "a" * 5)).status_code == 401
 
 
 async def test_add_student_without_password_gets_generated_password(env):
