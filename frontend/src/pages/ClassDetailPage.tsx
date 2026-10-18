@@ -48,6 +48,14 @@ export default function ClassDetailPage() {
     }
   };
 
+  const togglePassword = async (required: boolean) => {
+    try {
+      setClassroom(await api.updateClass(classId, { require_password: required }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save setting");
+    }
+  };
+
   const removeStudent = async (studentId: number) => {
     if (!confirm("Remove this student from the roster?")) return;
     await api.deleteStudent(classId, studentId);
@@ -104,6 +112,14 @@ export default function ClassDetailPage() {
         Class join code:{" "}
         <span className="font-mono text-xl font-bold tracking-wider">{classroom.join_code}</span>
       </p>
+      <label className="mt-3 flex items-center gap-2 text-ink/80">
+        <input
+          type="checkbox"
+          checked={classroom.require_password}
+          onChange={(e) => void togglePassword(e.target.checked)}
+        />
+        Require student password to join
+      </label>
       {error && <p className="mt-3 text-danger">{error}</p>}
 
       <section className="mt-8">

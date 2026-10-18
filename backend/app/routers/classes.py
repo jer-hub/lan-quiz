@@ -42,6 +42,7 @@ def _class_out(c: ClassRoom) -> ClassOut:
         name=c.name,
         join_code=c.join_code,
         student_count=len(c.students) if c.students is not None else 0,
+        require_password=c.require_password,
         created_at=c.created_at,
     )
 
@@ -121,7 +122,10 @@ async def update_class(
     db: AsyncSession = Depends(get_db),
 ) -> ClassOut:
     classroom = await _load_class(db, class_id, teacher)
-    classroom.name = payload.name.strip()
+    if payload.name is not None:
+        classroom.name = payload.name.strip()
+    if payload.require_password is not None:
+        classroom.require_password = payload.require_password
     await db.commit()
     return _class_out(await _load_class(db, class_id, teacher))
 

@@ -159,6 +159,7 @@ export interface ClassOut {
   name: string;
   join_code: string;
   student_count: number;
+  require_password: boolean;
   created_at: string;
 }
 

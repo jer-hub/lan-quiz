@@ -153,7 +153,14 @@ class ClassCreate(BaseModel):
 
 
 class ClassUpdate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=200)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    require_password: bool | None = None
+
+    @model_validator(mode="after")
+    def _needs_a_field(self) -> ClassUpdate:
+        if self.name is None and self.require_password is None:
+            raise ValueError("Send name or require_password")
+        return self
 
 
 class ClassOut(BaseModel):
@@ -161,6 +168,7 @@ class ClassOut(BaseModel):
     name: str
     join_code: str
     student_count: int
+    require_password: bool
     created_at: datetime
 
 
