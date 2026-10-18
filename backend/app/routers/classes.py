@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
-import random
+import secrets
 import string
 from typing import Any
 
@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/classes", tags=["classes"])
 def _gen_join_code() -> str:
     alphabet = string.ascii_uppercase + string.digits
     alphabet = alphabet.replace("O", "").replace("0", "").replace("I", "").replace("1", "")
-    return "".join(random.choices(alphabet, k=6))
+    return "".join(secrets.choice(alphabet) for _ in range(6))
 
 
 def _class_out(c: ClassRoom) -> ClassOut:
