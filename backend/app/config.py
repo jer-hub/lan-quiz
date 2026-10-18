@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_expire_hours: int = 72
     allow_default_secret: bool = False
+    # Lets a custom AI provider resolve to loopback/private addresses (e.g. a local model).
+    allow_private_ai_providers: bool = False
+    allow_teacher_registration: bool = False
 
     @property
     def database_url(self) -> str:
