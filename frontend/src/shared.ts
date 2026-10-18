@@ -171,6 +171,11 @@ export interface StudentOut {
   created_at: string;
 }
 
+export interface StudentCreated extends StudentOut {
+  /** Set only when the server generated the password; shown once, then never again. */
+  generated_password?: string | null;
+}
+
 export interface Assignment {
   id: number;
   class_id: number;

@@ -175,7 +175,7 @@ class ClassOut(BaseModel):
 class StudentCreate(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=120)
     student_code: str = Field(..., min_length=1, max_length=40)
-    password: str | None = Field(default=None, min_length=1, max_length=128)
+    password: str | None = Field(default=None, min_length=6, max_length=128)
 
 
 class StudentUpdate(BaseModel):
@@ -189,6 +189,13 @@ class StudentOut(BaseModel):
     display_name: str
     student_code: str
     created_at: datetime
+
+
+class StudentCreated(StudentOut):
+    """Response for a new student. generated_password is set only when the server
+    generated one, and is returned once here; it is never stored in readable form."""
+
+    generated_password: str | None = None
 
 
 class AssignmentCreate(BaseModel):
