@@ -10,7 +10,7 @@ import random
 import re
 import socket
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -145,8 +145,14 @@ def _is_internal_address(raw: str) -> bool:
     return ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_unspecified
 
 
-async def _check_provider_url(base_url: str) -> None:
-    """Refuse non-https or internal targets. The address check uses the resolved IPs."""
+async def _check_provider_url(base_url: str) -> tuple[str, str]:
+    """Refuse non-https or internal targets, then pin the connection to a checked address.
+
+    The host is resolved once. Every returned address must be public. The returned
+    URL uses the first checked IP, so the connection cannot be rebound to another
+    address. The hostname is returned separately for TLS (SNI and certificate check)
+    and the Host header.
+    """
     parts = urlsplit(base_url)
     if parts.scheme.lower() != "https":
         raise HTTPException(status_code=400, detail="AI provider URL must use https")
@@ -154,13 +160,15 @@ async def _check_provider_url(base_url: str) -> None:
     if not host:
         raise HTTPException(status_code=400, detail="AI provider URL must include a host")
     if settings.allow_private_ai_providers:
-        return
+        return base_url, host
     try:
         infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
         raise HTTPException(status_code=400, detail="Could not resolve AI provider host") from exc
+    addresses: list[str] = []
     for info in infos:
-        if _is_internal_address(info[4][0]):
+        address = info[4][0]
+        if _is_internal_address(address):
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -168,6 +176,15 @@ async def _check_provider_url(base_url: str) -> None:
                     "(set ALLOW_PRIVATE_AI_PROVIDERS=true to allow a local model)"
                 ),
             )
+        addresses.append(address)
+    if not addresses:
+        raise HTTPException(status_code=400, detail="Could not resolve AI provider host")
+    ip = addresses[0]
+    netloc = f"[{ip}]" if ":" in ip else ip
+    if parts.port is not None:
+        netloc += f":{parts.port}"
+    pinned = urlunsplit((parts.scheme, netloc, parts.path, parts.query, ""))
+    return pinned.rstrip("/"), host
 
 
 def _normalize_model(provider: str, model: str) -> str:
@@ -433,8 +450,10 @@ async def generate_quiz(
     model = _normalize_model(provider, payload.model)
     base_url = _resolve_base_url(provider, payload.base_url)
     # Presets are fixed https hosts; check them only when the teacher overrides the URL.
+    # Pinned to the checked address; TLS and Host still use the hostname.
+    tls_host: str | None = None
     if provider == "custom" or (payload.base_url or "").strip():
-        await _check_provider_url(base_url)
+        base_url, tls_host = await _check_provider_url(base_url)
     api_key = payload.api_key.strip()
 
     material = payload.source_material
@@ -465,10 +484,14 @@ async def generate_quiz(
     if provider == "openrouter":
         headers["HTTP-Referer"] = "https://lanquiz.local"
         headers["X-Title"] = "LanQuiz"
+    extensions: dict[str, Any] = {}
+    if tls_host:
+        headers["Host"] = tls_host
+        extensions["sni_hostname"] = tls_host
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, headers=headers, json=body)
+            resp = await client.post(url, headers=headers, json=body, extensions=extensions)
     except httpx.TimeoutException as exc:
         raise HTTPException(status_code=504, detail="AI provider timed out") from exc
     except httpx.RequestError as exc:

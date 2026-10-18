@@ -78,7 +78,7 @@ class FakeProvider:
     async def __aexit__(self, *exc):
         return False
 
-    async def post(self, url, headers=None, json=None):
+    async def post(self, url, headers=None, json=None, extensions=None):
         FakeProvider.calls.append(url)
         return FakeProvider.response
 
@@ -152,7 +152,8 @@ async def test_internal_host_allowed_with_flag(provider, monkeypatch):
 async def test_public_https_host_allowed(provider):
     resp = await _post(_payload("https://api.example.com/v1"))
     assert resp.status_code == 200
-    assert provider.calls == ["https://api.example.com/v1/chat/completions"]
+    # Connection is pinned to the checked address (the hostname stays in SNI and Host).
+    assert provider.calls == [f"https://{PUBLIC_IP}/v1/chat/completions"]
 
 
 async def test_preset_base_url_override_is_checked(provider):
@@ -179,3 +180,48 @@ async def test_provider_error_body_not_echoed(provider, body_text):
     assert "leak" not in resp.text
     assert "10.1.2.3" not in resp.text
     assert "500" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("base_url", ["https://lan.example/v1", "https://127.0.0.1/v1"])
+async def test_preset_with_internal_https_override_refused(provider, base_url):
+    # A preset's fixed host is trusted, but an internal base_url override is refused.
+    resp = await _post(_payload(base_url, provider_id="groq"))
+    assert resp.status_code == 400
+    assert provider.calls == []
+
+
+async def test_outbound_request_goes_to_the_checked_address(provider, monkeypatch):
+    """DNS rebinding: the name is resolved once. The request must go to the address that
+    was checked, while TLS still uses the hostname (SNI) and Host header."""
+    lookups: list[str] = []
+    answers = [PUBLIC_IP, "10.0.0.5"]  # a second lookup would return a private address
+
+    def rebinding_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        if host != "rebind.example":
+            return _fake_getaddrinfo(host, port, family, type, proto, flags)
+        lookups.append(host)
+        ip = answers.pop(0) if len(answers) > 1 else answers[0]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 443))]
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _ok_response()
+
+    transport = httpx.MockTransport(handler)
+
+    def mocked_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return RealAsyncClient(*args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", rebinding_getaddrinfo)
+    monkeypatch.setattr(httpx, "AsyncClient", mocked_client)
+
+    resp = await _post(_payload("https://rebind.example/v1"))
+    assert resp.status_code == 200
+    assert len(lookups) == 1
+    assert len(seen) == 1
+    assert seen[0].url.host == PUBLIC_IP
+    assert seen[0].headers["host"] == "rebind.example"
+    assert seen[0].extensions.get("sni_hostname") == "rebind.example"
