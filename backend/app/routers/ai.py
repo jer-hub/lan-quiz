@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import json
 import logging
 import random
 import re
+import socket
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
 
 from app.auth import require_teacher
+from app.config import settings
 from app.models import User
 from app.schemas import QuestionCreate, QuizCreate
 from app.text_extract import MAX_EXTRACT_CHARS, MAX_UPLOAD_BYTES, extract_text
@@ -130,6 +135,39 @@ def _resolve_base_url(provider: str, base_url: str | None) -> str:
     if not preset:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
     return (base_url or preset["base_url"]).strip().rstrip("/")
+
+
+def _is_internal_address(raw: str) -> bool:
+    ip = ipaddress.ip_address(raw.split("%", 1)[0])
+    # Treat ::ffff:127.0.0.1 style addresses as the IPv4 address they wrap.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_unspecified
+
+
+async def _check_provider_url(base_url: str) -> None:
+    """Refuse non-https or internal targets. The address check uses the resolved IPs."""
+    parts = urlsplit(base_url)
+    if parts.scheme.lower() != "https":
+        raise HTTPException(status_code=400, detail="AI provider URL must use https")
+    host = parts.hostname
+    if not host:
+        raise HTTPException(status_code=400, detail="AI provider URL must include a host")
+    if settings.allow_private_ai_providers:
+        return
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise HTTPException(status_code=400, detail="Could not resolve AI provider host") from exc
+    for info in infos:
+        if _is_internal_address(info[4][0]):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "AI provider URL must not point to a private or loopback address "
+                    "(set ALLOW_PRIVATE_AI_PROVIDERS=true to allow a local model)"
+                ),
+            )
 
 
 def _normalize_model(provider: str, model: str) -> str:
@@ -394,6 +432,9 @@ async def generate_quiz(
     provider = payload.provider.strip().lower()
     model = _normalize_model(provider, payload.model)
     base_url = _resolve_base_url(provider, payload.base_url)
+    # Presets are fixed https hosts; check them only when the teacher overrides the URL.
+    if provider == "custom" or (payload.base_url or "").strip():
+        await _check_provider_url(base_url)
     api_key = payload.api_key.strip()
 
     material = payload.source_material
@@ -450,18 +491,12 @@ async def generate_quiz(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail)
 
     if resp.status_code >= 400:
-        msg = "AI provider error"
-        try:
-            err = resp.json()
-            msg = (
-                err.get("error", {}).get("message")
-                or err.get("message")
-                or msg
-            )
-        except Exception:
-            msg = resp.text[:300] or msg
-        # Never echo the API key
-        raise HTTPException(status_code=502, detail=str(msg)[:500])
+        # Provider bodies are not echoed: they can carry key fragments or internal details.
+        logger.warning("AI provider returned status=%s", resp.status_code)
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI provider returned an error (HTTP {resp.status_code})",
+        )
 
     try:
         data = resp.json()

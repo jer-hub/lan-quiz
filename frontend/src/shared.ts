@@ -159,6 +159,7 @@ export interface ClassOut {
   name: string;
   join_code: string;
   student_count: number;
+  require_password: boolean;
   created_at: string;
 }
 
@@ -168,6 +169,11 @@ export interface StudentOut {
   display_name: string;
   student_code: string;
   created_at: string;
+}
+
+export interface StudentCreated extends StudentOut {
+  /** Set only when the server generated the password; shown once, then never again. */
+  generated_password?: string | null;
 }
 
 export interface Assignment {
@@ -256,6 +262,7 @@ export interface PinPeek {
   quiz_title: string;
   status: string;
   requires_student_code: boolean;
+  requires_password?: boolean;
   player_count: number;
   team_mode?: boolean;
   teams?: string[];
