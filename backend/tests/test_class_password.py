@@ -82,8 +82,16 @@ async def client(tmp_path, monkeypatch):
 
 
 async def _teacher(client: httpx.AsyncClient, username: str) -> dict[str, str]:
-    res = await client.post("/api/auth/register", json={"username": username, "password": "secret123"})
-    assert res.status_code == 201, res.text
+    # Teacher self-registration closes after the first account, so insert the row directly.
+    import app.database as database
+    from app.auth import hash_password
+    from app.models import User
+
+    async with database.AsyncSessionLocal() as session:
+        session.add(User(username=username, password_hash=hash_password("secret123"), role="teacher"))
+        await session.commit()
+    res = await client.post("/api/auth/login", json={"username": username, "password": "secret123"})
+    assert res.status_code == 200, res.text
     return {"Authorization": f"Bearer {res.json()['token']}"}
 
 
