@@ -21,6 +21,7 @@ from app.auth import (
     teacher_token,
     verify_password,
 )
+from app.config import settings
 from app.database import get_db
 from app.models import ClassRoom, Student, User
 from app.schemas import (
@@ -37,6 +38,13 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.post("/register", response_model=AuthUserOut, status_code=status.HTTP_201_CREATED)
 async def register_teacher(payload: TeacherRegister, db: AsyncSession = Depends(get_db)) -> AuthUserOut:
+    # Self-service registration closes once a teacher exists; re-open with ALLOW_TEACHER_REGISTRATION=true.
+    teacher_exists = await db.execute(select(User.id).where(User.role == "teacher").limit(1))
+    if teacher_exists.scalar_one_or_none() is not None and not settings.allow_teacher_registration:
+        raise HTTPException(
+            status_code=403,
+            detail="Teacher registration is closed. An administrator must add the account.",
+        )
     username = payload.username.strip().lower()
     if len(username) < 3:
         raise HTTPException(status_code=400, detail="Username too short")

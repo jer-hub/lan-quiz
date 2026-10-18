@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_expire_hours: int = 72
     allow_default_secret: bool = False
+    allow_teacher_registration: bool = False
 
     @property
     def database_url(self) -> str:
