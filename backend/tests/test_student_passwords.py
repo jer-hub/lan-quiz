@@ -35,7 +35,7 @@ async def env(tmp_path) -> AsyncIterator[dict[str, Any]]:
 
     async with Session() as session:
         teacher = User(
-            username="mrs.lee", password_hash=hash_password("teacherpass"), role="teacher"
+            username="mrs.lee", password_hash=hash_password("t" * 11), role="teacher"
         )
         session.add(teacher)
         await session.flush()
@@ -69,7 +69,7 @@ async def test_add_student_short_password_refused(env):
     res = await c.post(
         f"/api/classes/{cid}/students",
         headers=env["headers"],
-        json={"display_name": "Ada", "student_code": "ada01", "password": "abc12"},
+        json={"display_name": "Ada", "student_code": "ada01", "password": "a" * 5},
     )
     assert res.status_code in (400, 422)
     assert (await _login(c, "ADA01", "abc12")).status_code == 401
