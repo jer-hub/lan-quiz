@@ -262,6 +262,7 @@ export interface PinPeek {
   quiz_title: string;
   status: string;
   requires_student_code: boolean;
+  requires_password?: boolean;
   player_count: number;
   team_mode?: boolean;
   teams?: string[];

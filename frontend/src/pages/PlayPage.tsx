@@ -29,6 +29,8 @@ export default function PlayPage() {
   const [nickname, setNickname] = useState("");
   const [studentCode, setStudentCode] = useState("");
   const [requiresCode, setRequiresCode] = useState(false);
+  const [password, setPassword] = useState("");
+  const [requiresPassword, setRequiresPassword] = useState(false);
   const [teamMode, setTeamMode] = useState(false);
   const [teams, setTeams] = useState<string[]>([]);
   const [team, setTeam] = useState("");
@@ -75,6 +77,7 @@ export default function PlayPage() {
     const p = pin.trim().toUpperCase();
     if (p.length < 4) {
       setRequiresCode(false);
+      setRequiresPassword(false);
       setTeamMode(false);
       setTeams([]);
       return;
@@ -84,11 +87,13 @@ export default function PlayPage() {
         .peekPin(p)
         .then((info) => {
           setRequiresCode(info.requires_student_code);
+          setRequiresPassword(!!info.requires_password);
           setTeamMode(!!info.team_mode);
           setTeams(info.teams || []);
         })
         .catch(() => {
           setRequiresCode(false);
+          setRequiresPassword(false);
           setTeamMode(false);
           setTeams([]);
         });
@@ -200,14 +205,16 @@ export default function PlayPage() {
       pin: pin.trim().toUpperCase(),
       nickname: nickname.trim(),
       student_code: studentCode.trim().toUpperCase() || undefined,
+      password: requiresPassword ? password || undefined : undefined,
       team: teamMode ? team || undefined : undefined,
     });
-  }, [socket, pin, nickname, studentCode, teamMode, team]);
+  }, [socket, pin, nickname, studentCode, password, requiresPassword, teamMode, team]);
 
   const canJoin =
     connected &&
     pin.trim().length >= 4 &&
     (requiresCode ? studentCode.trim().length >= 1 : nickname.trim().length >= 1) &&
+    (!requiresPassword || password.length >= 1) &&
     (!teamMode || team.length >= 1);
 
   const submit = useCallback(
@@ -325,6 +332,19 @@ export default function PlayPage() {
               <span className="mt-1 block text-xs text-ink/50">
                 {t.classGameNote}
               </span>
+              {requiresPassword ? (
+                <>
+                  <span className="mb-1 mt-3 block text-sm font-bold">{t.studentPassword}</span>
+                  <input
+                    type="password"
+                    className="w-full rounded-xl border border-sky-200 px-4 py-3 text-lg font-semibold"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    maxLength={128}
+                    autoComplete="current-password"
+                  />
+                </>
+              ) : null}
             </label>
           ) : (
             <label className="mt-4 block">
