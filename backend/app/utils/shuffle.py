@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import random
 
 
@@ -31,3 +32,9 @@ def unshuffle_index(shuffled_idx: int, order: list[int]) -> int:
     if 0 <= shuffled_idx < len(order):
         return order[shuffled_idx]
     return shuffled_idx
+
+
+def stable_seed(*parts: object) -> int:
+    """Seed that is the same in every process (unlike hash(), which is randomized per run)."""
+    digest = hashlib.sha256("|".join(str(p) for p in parts).encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big")

@@ -607,15 +607,23 @@ class GameManager:
             question = session.questions[next_idx]
             session.option_map.clear()
             if question.kind == "mc" and len(question.options) > 1:
-                from app.utils.shuffle import shuffle_options
+                from app.utils.shuffle import shuffle_options, stable_seed
 
+                used_orders: set[tuple[int, ...]] = set()
                 for psid, p in session.players.items():
                     if p.is_host:
                         continue
-                    seed = hash((session.pin, next_idx, psid)) & 0xFFFFFFFF
-                    _, _, order = shuffle_options(
-                        question.options, question.correct_indices, seed=seed
-                    )
+                    # Re-draw a few times so players in one game don't share an order.
+                    # Bounded: a question with few options may run out of distinct orders.
+                    order: list[int] = []
+                    for attempt in range(10):
+                        seed = stable_seed(session.pin, next_idx, psid, attempt)
+                        _, _, order = shuffle_options(
+                            question.options, question.correct_indices, seed=seed
+                        )
+                        if tuple(order) not in used_orders:
+                            break
+                    used_orders.add(tuple(order))
                     session.option_map[psid] = order
             return session, question
 
