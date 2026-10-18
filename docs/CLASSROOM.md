@@ -24,9 +24,9 @@ Students are **not** self-signup. Teachers add them to a class roster.
 
 1. Teacher opens **Classes** → create class → note **join code** (e.g. `GNFDET`).
 2. Add students: display name + `student_code` (unique **within** the class).
-3. Default password = `student_code` (uppercase normalized). Optional custom password.
+3. Password: optional custom password (6+ characters). If left blank, the server generates one (8+ characters, never the student code) and shows it once in the response.
 4. CSV import headers (exact order): `username,password,first_name,last_name,email,school_id,class_section`
-   — `student_code` = `username`, name = first + last, blank password defaults to username.
+   — `student_code` = `username`, name = first + last, blank password gets a generated one (shown once on the roster screen after import), supplied passwords need 6+ characters.
 
 If the same `student_code` exists in multiple classes, the student must also enter the **class join code** at login.
 

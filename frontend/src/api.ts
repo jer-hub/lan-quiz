@@ -17,6 +17,7 @@ import type {
   QuestionAnalysis,
   Quiz,
   QuizSummary,
+  StudentCreated,
   StudentOut,
 } from "./shared";
 
@@ -148,7 +149,7 @@ export const api = {
     classId: number,
     body: { display_name: string; student_code: string; password?: string },
   ) =>
-    request<StudentOut>(`/api/classes/${classId}/students`, {
+    request<StudentCreated>(`/api/classes/${classId}/students`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
@@ -157,7 +158,7 @@ export const api = {
   importRoster: async (classId: number, file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    const res = await request<{ added: StudentOut[]; skipped: Array<{ row: number; reason: string }> } | StudentOut[]>(
+    const res = await request<{ added: StudentCreated[]; skipped: Array<{ row: number; reason: string }> } | StudentCreated[]>(
       `/api/classes/${classId}/students/import`,
       {
         method: "POST",

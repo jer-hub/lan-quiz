@@ -22,8 +22,18 @@ def test_valid_mapping():
     assert skipped == []
     assert rows[0]["student_code"] == "ADA01"
     assert rows[0]["display_name"] == "Ada Lovelace"
-    assert rows[0]["password"] == "ADA01"  # blank defaults to username
+    assert rows[0]["password"] is None  # blank: generated at import, never the code
     assert rows[1]["password"] == "secret42"
+
+
+def test_short_supplied_password_skipped():
+    raw = (
+        "username,password,first_name,last_name,email,school_id,class_section\n"
+        "cyz03,abc,Cy,Zed,e,S,7-A\n"
+    )
+    rows, skipped = parse_roster_csv(raw)
+    assert rows == []
+    assert skipped == [{"row": 2, "reason": "password too short (min 6)"}]
 
 
 def test_wrong_order_rejected():
