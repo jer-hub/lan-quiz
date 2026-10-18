@@ -6,6 +6,17 @@
 - Node.js 22+ (or compatible LTS)
 - Docker (recommended for full stack parity)
 
+## Guardrails
+
+Install the pre-commit hook once, so secrets are caught before they are committed:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+CI also type-checks the frontend (`npx tsc --noEmit`) before building it.
+
 ## Environment
 
 Copy `.env.example` → `.env` at the repo root.
