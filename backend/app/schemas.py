@@ -313,6 +313,7 @@ class AttemptAnswerIn(BaseModel):
     order_index: int = 0
     option_index: int | None = None
     answer_text: str | None = None
+    order: list[int] | None = None
 
 
 class AttemptOut(BaseModel):

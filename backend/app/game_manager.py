@@ -249,6 +249,15 @@ def normalize_short_answer(value: str) -> str:
     return " ".join(str(value or "").strip().lower().split())
 
 
+def is_permutation(seq: object, n: int) -> bool:
+    """True when seq is a list containing each index 0..n-1 exactly once."""
+    if not isinstance(seq, list) or len(seq) != n:
+        return False
+    if not all(isinstance(i, int) and not isinstance(i, bool) for i in seq):
+        return False
+    return sorted(seq) == list(range(n))
+
+
 def calculate_score(elapsed_ms: int, time_limit_s: int, correct: bool) -> int:
     """Kahoot-style scoring.
 
@@ -611,7 +620,11 @@ class GameManager:
             return session, question
 
     async def submit_answer(
-        self, sid: str, option_index: int | None = None, answer_text: str | None = None
+        self,
+        sid: str,
+        option_index: int | None = None,
+        answer_text: str | None = None,
+        order: list[int] | None = None,
     ) -> tuple[GameSession, AnswerRecord, bool]:
         """Submit answer. Returns (session, record, all_answered)."""
         async with self._lock:
@@ -646,13 +659,13 @@ class GameManager:
                 )
                 canonical_idx = -1
             elif question.kind == "ordering":
-                if option_index is None or not 0 <= option_index < len(question.options):
-                    # Ordering uses single-tap position; validate range.
-                    raise ValueError("Invalid option.")
-                # Ordering: only exact position 0 (canonical first) scores; frontend
-                # sends the tapped position in canonical order (no shuffle for ordering).
-                canonical_idx = int(option_index)
-                correct = canonical_idx in question.correct_indices
+                # The student submits the full sequence of canonical option indices in
+                # the order they placed them. Only the canonical order (options as
+                # authored) is correct. Ordering is not shuffled, so no remap is needed.
+                if not is_permutation(order, len(question.options)):
+                    raise ValueError("Invalid order.")
+                canonical_idx = -1
+                correct = list(order) == list(range(len(question.options)))
             else:
                 if option_index is None or option_index < 0:
                     raise ValueError("Invalid option.")
@@ -685,9 +698,15 @@ class GameManager:
             all_answered = len(session.current_answers) >= session.player_count()
             return session, record, all_answered
 
-    async def end_question(self, session: GameSession) -> dict[str, Any]:
-        """Finalize current question and build reveal payload."""
+    async def end_question(self, session: GameSession) -> dict[str, Any] | None:
+        """Finalize current question and build reveal payload.
+
+        Returns None when the question was already finalized (last answer, timer
+        and host action can race). Nothing is changed in that case.
+        """
         async with self._lock:
+            if session.status != GameStatus.QUESTION:
+                return None
             if session.question_task and not session.question_task.done():
                 session.question_task.cancel()
                 session.question_task = None

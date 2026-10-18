@@ -212,7 +212,7 @@ export const api = {
   getAttempt: (attemptId: number) => request<AttemptDetail>(`/api/attempts/${attemptId}`),
   submitAttempt: (
     attemptId: number,
-    answers: Array<{ order_index: number; option_index?: number | null; answer_text?: string | null; question_id?: number | null }>,
+    answers: Array<{ order_index: number; option_index?: number | null; answer_text?: string | null; question_id?: number | null; order?: number[] | null }>,
   ) =>
     request<AttemptSubmitResult>(`/api/attempts/${attemptId}/submit`, {
       method: "POST",

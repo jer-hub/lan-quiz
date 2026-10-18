@@ -33,6 +33,7 @@ export default function PlayPage() {
   const [teams, setTeams] = useState<string[]>([]);
   const [team, setTeam] = useState("");
   const [shortText, setShortText] = useState("");
+  const [orderSeq, setOrderSeq] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [lobby, setLobby] = useState<LobbyState | null>(null);
   const [mySid, setMySid] = useState<string | null>(null);
@@ -134,6 +135,7 @@ export default function PlayPage() {
     setQuestion(data);
     setSelected(null);
     setShortText("");
+    setOrderSeq([]);
     setLocked(false);
     setReveal(null);
     setLastPoints(null);
@@ -215,6 +217,21 @@ export default function PlayPage() {
       socket.emit("submit_answer", { option_index: optionIndex });
     },
     [locked, phase, socket],
+  );
+
+  // Ordering: tap options first-to-last; the full sequence is sent once every option is placed.
+  const placeOrder = useCallback(
+    (optionIndex: number, total: number) => {
+      if (locked || phase !== "question") return;
+      if (orderSeq.includes(optionIndex)) return;
+      const next = [...orderSeq, optionIndex];
+      setOrderSeq(next);
+      if (next.length === total) {
+        setSelected(-1);
+        socket.emit("submit_answer", { order: next });
+      }
+    },
+    [locked, phase, orderSeq, socket],
   );
 
   const submitShort = useCallback(() => {
@@ -404,28 +421,41 @@ export default function PlayPage() {
             <div className="mt-6 grid grid-cols-2 gap-3">
               {question.options.map((opt, i) => {
                 const isSelected = selected === i;
+                const place = orderSeq.indexOf(i);
+                const isOrdering = question.kind === "ordering";
                 return (
                   <button
                     key={i}
                     type="button"
-                    disabled={locked}
-                    onClick={() => submit(i)}
+                    disabled={locked || (isOrdering && place >= 0)}
+                    onClick={() => (isOrdering ? placeOrder(i, question.options.length) : submit(i))}
                     className={`min-h-28 rounded-2xl p-4 text-left text-lg font-extrabold text-white shadow-md transition active:scale-[0.98] disabled:opacity-80 ${
                       isSelected ? "ring-4 ring-white ring-offset-2 ring-offset-sky-300" : ""
                     }`}
                     style={{ backgroundColor: COLORS[i % COLORS.length] }}
                   >
-                    <span className="mb-1 block text-2xl opacity-90">{OPTION_SHAPES[i]}</span>
+                    <span className="mb-1 block text-2xl opacity-90">
+                      {isOrdering && place >= 0 ? `#${place + 1}` : OPTION_SHAPES[i]}
+                    </span>
                     {opt}
                   </button>
                 );
               })}
             </div>
           )}
-          {question.kind === "ordering" && (
-            <p className="mt-3 text-center text-xs text-ink/50">
-              Ordering — tap the option that comes first (MVP).
-            </p>
+          {question.kind === "ordering" && !locked && (
+            <div className="mt-3 text-center text-xs text-ink/50">
+              <p>Ordering — tap the options from first to last.</p>
+              {orderSeq.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setOrderSeq([])}
+                  className="mt-1 underline"
+                >
+                  Start over
+                </button>
+              )}
+            </div>
           )}
           {phase === "waiting" && (
             <p className="mt-6 text-center font-bold text-brand-dark animate-pulse-soft">

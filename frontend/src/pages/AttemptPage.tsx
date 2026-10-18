@@ -7,7 +7,9 @@ export default function AttemptPage() {
   const { attemptId } = useParams();
   const navigate = useNavigate();
   const [detail, setDetail] = useState<AttemptDetail | null>(null);
-  const [answers, setAnswers] = useState<Record<number, { option_index?: number | null; answer_text?: string }>>({});
+  const [answers, setAnswers] = useState<
+    Record<number, { option_index?: number | null; answer_text?: string; order?: number[] }>
+  >({});
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ score: number; total: number; correct_count: number } | null>(null);
 
@@ -70,6 +72,45 @@ export default function AttemptPage() {
                 }
                 placeholder="Type your answer"
               />
+            ) : q.kind === "ordering" ? (
+              <div className="mt-3 grid gap-2">
+                <p className="text-xs text-ink/50">Tap the options from first to last.</p>
+                {q.options.map((opt, i) => {
+                  const place = (answers[q.order_index]?.order || []).indexOf(i);
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      disabled={place >= 0}
+                      onClick={() =>
+                        setAnswers((p) => ({
+                          ...p,
+                          [q.order_index]: {
+                            order: [...(p[q.order_index]?.order || []), i],
+                          },
+                        }))
+                      }
+                      className={`rounded-xl px-3 py-2 text-left font-semibold ${
+                        place >= 0 ? "bg-brand text-white" : "bg-sky-50"
+                      }`}
+                    >
+                      {place >= 0 ? `#${place + 1} ` : ""}
+                      {opt}
+                    </button>
+                  );
+                })}
+                {(answers[q.order_index]?.order || []).length > 0 && (
+                  <button
+                    type="button"
+                    className="justify-self-start text-xs underline"
+                    onClick={() =>
+                      setAnswers((p) => ({ ...p, [q.order_index]: { order: [] } }))
+                    }
+                  >
+                    Start over
+                  </button>
+                )}
+              </div>
             ) : (
               <div className="mt-3 grid gap-2">
                 {q.options.map((opt, i) => (
@@ -101,6 +142,7 @@ export default function AttemptPage() {
                 question_id: q.question_id,
                 option_index: answers[q.order_index]?.option_index ?? null,
                 answer_text: answers[q.order_index]?.answer_text ?? null,
+                order: answers[q.order_index]?.order ?? null,
               }));
               const res = await api.submitAttempt(Number(attemptId), payload);
               setDone({ score: res.score, total: res.total, correct_count: res.correct_count });

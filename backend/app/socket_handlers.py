@@ -75,12 +75,18 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
             session = game_manager.get_by_pin(pin)
             if not session or session.status.value != "question":
                 return
+            # Detach this task before finalizing: end_question cancels question_task,
+            # and cancelling the running task would abort the reveal tail below.
+            session.question_task = None
             await finalize_question(session)
         except asyncio.CancelledError:
             return
 
     async def finalize_question(session: Any) -> None:
         payload = await game_manager.end_question(session)
+        if payload is None:
+            # Already finalized by a racing path; don't re-emit the reveal.
+            return
         await sio.emit("question_ended", payload, room=session.pin)
         await game_manager.set_leaderboard_status(session)
         await save_snapshot(session)
@@ -516,9 +522,14 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
             except (TypeError, ValueError):
                 await emit_error(sid, "Invalid option_index")
                 return
+        raw_order = (data or {}).get("order")
+        order = raw_order if isinstance(raw_order, list) else None
         try:
             session, record, all_answered = await game_manager.submit_answer(
-                sid, option_index, str(raw_text) if raw_text is not None else None
+                sid,
+                option_index,
+                str(raw_text) if raw_text is not None else None,
+                order=order,
             )
         except ValueError as exc:
             await emit_error(sid, str(exc))
