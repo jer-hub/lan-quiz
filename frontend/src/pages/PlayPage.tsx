@@ -31,6 +31,8 @@ export default function PlayPage() {
   const [requiresCode, setRequiresCode] = useState(false);
   const [password, setPassword] = useState("");
   const [requiresPassword, setRequiresPassword] = useState(false);
+  // PIN whose class settings (peek) have been loaded; auto-rejoin waits for it.
+  const [pinInfoFor, setPinInfoFor] = useState<string | null>(null);
   const [teamMode, setTeamMode] = useState(false);
   const [teams, setTeams] = useState<string[]>([]);
   const [team, setTeam] = useState("");
@@ -75,11 +77,15 @@ export default function PlayPage() {
 
   useEffect(() => {
     const p = pin.trim().toUpperCase();
-    if (p.length < 4) {
+    const resetPinInfo = () => {
       setRequiresCode(false);
       setRequiresPassword(false);
       setTeamMode(false);
       setTeams([]);
+    };
+    if (p.length < 4) {
+      setPinInfoFor(null);
+      resetPinInfo();
       return;
     }
     const t = window.setTimeout(() => {
@@ -90,12 +96,11 @@ export default function PlayPage() {
           setRequiresPassword(!!info.requires_password);
           setTeamMode(!!info.team_mode);
           setTeams(info.teams || []);
+          setPinInfoFor(p);
         })
         .catch(() => {
-          setRequiresCode(false);
-          setRequiresPassword(false);
-          setTeamMode(false);
-          setTeams([]);
+          resetPinInfo();
+          setPinInfoFor(p);
         });
     }, 300);
     return () => window.clearTimeout(t);
@@ -174,7 +179,8 @@ export default function PlayPage() {
     clearJoinSession();
   });
 
-  // Auto-rejoin on (re)connect using stored sid.
+  // Auto-rejoin on (re)connect using stored sid. A class that requires a password is never
+  // rejoined without one typed on this page: after a refresh the student re-enters it.
   useEffect(() => {
     if (!connected || rejoinedRef.current) return;
     const stored = loadJoinSession();
@@ -183,16 +189,21 @@ export default function PlayPage() {
     const currentPin = (pin || stored.pin).trim().toUpperCase();
     if (phase === "join" && !pin && stored.pin) setPin(stored.pin);
     if (phase !== "join" || stored.pin === currentPin) {
+      if (phase === "join" && pinInfoFor !== stored.pin) return; // class settings not loaded yet
+      if (requiresPassword && !password) return;
       rejoinedRef.current = true;
       if (phase !== "join") setReconnecting(true);
       socket.emit("join_game", {
         pin: stored.pin,
         nickname: stored.nickname,
         student_code: stored.student_code || undefined,
+        password: requiresPassword ? password : undefined,
         rejoin_sid: stored.sid,
       });
     }
-  }, [connected, socket, phase, pin]);
+    // `password` is left out on purpose: typing must not trigger an auto-rejoin.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, socket, phase, pin, pinInfoFor, requiresPassword]);
 
   useEffect(() => {
     if (connected) setReconnecting(false);
@@ -201,12 +212,16 @@ export default function PlayPage() {
 
   const join = useCallback(() => {
     setError(null);
+    const joinPin = pin.trim().toUpperCase();
+    // A stored session for this PIN is a reconnect: keep the score (the server still checks the password).
+    const stored = loadJoinSession();
     socket.emit("join_game", {
-      pin: pin.trim().toUpperCase(),
+      pin: joinPin,
       nickname: nickname.trim(),
       student_code: studentCode.trim().toUpperCase() || undefined,
       password: requiresPassword ? password || undefined : undefined,
       team: teamMode ? team || undefined : undefined,
+      rejoin_sid: stored?.pin === joinPin ? stored.sid : undefined,
     });
   }, [socket, pin, nickname, studentCode, password, requiresPassword, teamMode, team]);
 
