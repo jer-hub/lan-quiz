@@ -15,7 +15,7 @@ OpenAPI interactive docs (when not overridden by SPA): try `/docs` in developmen
 
 | Method | Path | Auth | Body | Description |
 |--------|------|------|------|-------------|
-| POST | `/api/auth/register` | No | `{ username, password }` | Create teacher |
+| POST | `/api/auth/register` | No | `{ username, password }` | Create teacher. Closed once a teacher exists, unless `ALLOW_TEACHER_REGISTRATION=true` |
 | POST | `/api/auth/login` | No | `{ username, password }` | Teacher JWT |
 | POST | `/api/auth/student/login` | No | `{ student_code, password, join_code? }` | Student JWT |
 | GET | `/api/auth/me` | Yes | — | Current principal |

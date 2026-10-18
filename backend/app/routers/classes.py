@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import csv
-import io
 import logging
-import secrets
 import string
 from typing import Any
 
@@ -17,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from app.auth import hash_password, require_teacher
 from app.database import get_db
 from app.models import ClassRoom, Student, User
+from app.roster import MAX_CSV_ROWS, ROSTER_HEADERS, STUDENT_PASSWORD_MIN, read_csv_rows
 from app.schemas import (
     ClassCreate,
     ClassOut,
@@ -26,29 +24,34 @@ from app.schemas import (
     StudentOut,
     StudentUpdate,
 )
+from app.utils.random_codes import random_code
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/classes", tags=["classes"])
 
-STUDENT_PASSWORD_MIN = 6
 GENERATED_PASSWORD_LENGTH = 10
+JOIN_CODE_ALPHABET = string.ascii_uppercase + string.digits
+for _ch in "O0I1":
+    JOIN_CODE_ALPHABET = JOIN_CODE_ALPHABET.replace(_ch, "")
+GENERATED_PASSWORD_ALPHABET = string.ascii_letters + string.digits
+for _ch in "O0Il1":
+    GENERATED_PASSWORD_ALPHABET = GENERATED_PASSWORD_ALPHABET.replace(_ch, "")
 
 
 def _gen_join_code() -> str:
-    alphabet = string.ascii_uppercase + string.digits
-    alphabet = alphabet.replace("O", "").replace("0", "").replace("I", "").replace("1", "")
-    return "".join(secrets.choice(alphabet) for _ in range(6))
+    return random_code(6, JOIN_CODE_ALPHABET)
 
 
 def _gen_student_password(code: str) -> str:
     """Random password from an unambiguous alphabet. Never equal to the student code."""
-    alphabet = string.ascii_letters + string.digits
-    for ch in "O0Il1":
-        alphabet = alphabet.replace(ch, "")
     while True:
-        pw = "".join(secrets.choice(alphabet) for _ in range(GENERATED_PASSWORD_LENGTH))
+        pw = random_code(GENERATED_PASSWORD_LENGTH, GENERATED_PASSWORD_ALPHABET)
         if pw.upper() != code.upper():
             return pw
+
+
+def _student_created(student: Student, generated_password: str | None) -> StudentCreated:
+    return StudentCreated(**_student_out(student).model_dump(), generated_password=generated_password)
 
 
 def _class_out(c: ClassRoom) -> ClassOut:
@@ -193,7 +196,7 @@ async def add_student(
     db.add(student)
     await db.commit()
     await db.refresh(student)
-    return StudentCreated(**_student_out(student).model_dump(), generated_password=generated)
+    return _student_created(student, generated)
 
 
 @router.put("/{class_id}/students/{student_id}", response_model=StudentOut)
@@ -239,41 +242,17 @@ async def delete_student(
     return Response(status_code=204)
 
 
-MAX_CSV_ROWS = 500  # data rows per roster or teacher CSV import
-
-ROSTER_HEADERS = [
-    "username",
-    "password",
-    "first_name",
-    "last_name",
-    "email",
-    "school_id",
-    "class_section",
-]
-
-
 def parse_roster_csv(raw: str) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     """Validate headers (exact sequence) and map rows.
 
     Mapping: student_code=username (upper), password=supplied password or None
-    (None means generate one at import; supplied passwords need 6+ chars),
+    (None means generate one at import; supplied passwords need STUDENT_PASSWORD_MIN+ chars),
     display_name="first_name last_name". email/school_id/class_section ignored.
     Returns (valid_rows, skipped) with 1-based file row numbers.
     """
-    reader = csv.DictReader(io.StringIO(raw))
-    if not reader.fieldnames:
-        raise ValueError("Empty CSV")
-    headers = [h.strip() if h else "" for h in reader.fieldnames]
-    if headers != ROSTER_HEADERS:
-        raise ValueError(
-            "CSV must have headers in order: " + ",".join(ROSTER_HEADERS)
-        )
-    data_rows = list(reader)
-    if len(data_rows) > MAX_CSV_ROWS:
-        raise ValueError(f"CSV has more than {MAX_CSV_ROWS} data rows (max {MAX_CSV_ROWS})")
     valid: list[dict[str, str]] = []
     skipped: list[dict[str, Any]] = []
-    for lineno, row in enumerate(data_rows, start=2):
+    for lineno, row in enumerate(read_csv_rows(raw), start=2):
         username = (row.get("username") or "").strip()
         password = (row.get("password") or "").strip()
         first = (row.get("first_name") or "").strip()
@@ -284,7 +263,7 @@ def parse_roster_csv(raw: str) -> tuple[list[dict[str, str]], list[dict[str, Any
             skipped.append({"row": lineno, "reason": "missing username or name"})
             continue
         if password and len(password) < STUDENT_PASSWORD_MIN:
-            skipped.append({"row": lineno, "reason": "password too short (min 6)"})
+            skipped.append({"row": lineno, "reason": f"password too short (min {STUDENT_PASSWORD_MIN})"})
             continue
         valid.append(
             {
@@ -346,12 +325,9 @@ async def import_roster_csv(
     except Exception:
         await db.rollback()
         raise HTTPException(status_code=400, detail="Import failed, no rows added")
-    for s, _ in created:
-        await db.refresh(s)
+    for student, _ in created:
+        await db.refresh(student)
     return {
-        "added": [
-            StudentCreated(**_student_out(s).model_dump(), generated_password=g).model_dump()
-            for s, g in created
-        ],
+        "added": [_student_created(student, generated).model_dump() for student, generated in created],
         "skipped": sorted(skipped, key=lambda s: s["row"]),
     }

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import secrets
 import string
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -12,6 +11,7 @@ from enum import Enum
 from typing import Any
 
 from app.config import settings
+from app.utils.random_codes import random_code
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +290,7 @@ class GameManager:
         # Avoid ambiguous characters
         alphabet = alphabet.replace("O", "").replace("0", "").replace("I", "").replace("1", "")
         for _ in range(50):
-            pin = "".join(secrets.choice(alphabet) for _ in range(6))
+            pin = random_code(6, alphabet)
             if pin not in self._games:
                 return pin
         raise RuntimeError("Could not generate unique PIN")

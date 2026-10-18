@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
+import { STUDENT_PASSWORD_MIN } from "../shared";
 import type { ClassOut, Gradebook, StudentCreated, StudentOut } from "../shared";
 
 export default function ClassDetailPage() {
@@ -176,7 +177,7 @@ export default function ClassDetailPage() {
         <p className="mt-2 text-xs text-ink/50">
           CSV headers in order: username,password,first_name,last_name,email,school_id,class_section
           — code = username, name = first + last, blank password gets a generated one (shown once),
-          supplied passwords need 6+ characters
+          supplied passwords need {STUDENT_PASSWORD_MIN}+ characters
         </p>
         {newPasswords.length > 0 && (
           <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm">

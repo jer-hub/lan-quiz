@@ -380,7 +380,7 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                     await emit_error(sid, UNKNOWN_STUDENT_ERROR)
                     return
 
-                # Class password setting (#8): a missing or wrong password gets the same
+                # Class password setting: a missing or wrong password gets the same
                 # error as an unknown code, so the response does not reveal which codes exist.
                 classroom = await db.get(ClassRoom, session_peek.class_id)
                 if classroom and classroom.require_password:

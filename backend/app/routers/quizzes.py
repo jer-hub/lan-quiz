@@ -72,14 +72,14 @@ class ImageUploadSizeLimit:
             buffered.append(message)
             if not message.get("more_body", False):
                 break
-        queue = list(buffered)
+        pending_messages = list(buffered)
 
-        async def replay() -> Message:
-            if queue:
-                return queue.pop(0)
+        async def replay_receive() -> Message:
+            if pending_messages:
+                return pending_messages.pop(0)
             return await receive()
 
-        await self.app(scope, replay, send)
+        await self.app(scope, replay_receive, send)
 
     @staticmethod
     async def _refuse(scope: Scope, receive: Receive, send: Send) -> None:

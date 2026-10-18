@@ -363,3 +363,6 @@ export const OPTION_COLORS = [
 ] as const;
 
 export const OPTION_SHAPES = ["▲", "◆", "●", "■", "★", "✦"] as const;
+
+/** Minimum length for a supplied student password. Matches the backend (app/roster.py). */
+export const STUDENT_PASSWORD_MIN = 6;

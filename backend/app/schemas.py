@@ -7,6 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.roster import STUDENT_PASSWORD_MIN
+
 
 class QuestionCreate(BaseModel):
     text: str = Field(..., min_length=1, max_length=2000)
@@ -175,7 +177,7 @@ class ClassOut(BaseModel):
 class StudentCreate(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=120)
     student_code: str = Field(..., min_length=1, max_length=40)
-    password: str | None = Field(default=None, min_length=6, max_length=128)
+    password: str | None = Field(default=None, min_length=STUDENT_PASSWORD_MIN, max_length=128)
 
 
 class StudentUpdate(BaseModel):

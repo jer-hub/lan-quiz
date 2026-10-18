@@ -26,7 +26,7 @@ async def peek_pin(pin: str, db: AsyncSession = Depends(get_db)) -> dict[str, An
     session = game_manager.get_by_pin(pin.strip().upper())
     if not session:
         raise HTTPException(status_code=404, detail="No active game with that PIN")
-    # Class password setting (#8): the join form shows a password field when the class requires one.
+    # Class password setting: the join form shows a password field when the class requires one.
     requires_password = False
     if session.requires_student_code and session.class_id:
         classroom = await db.get(ClassRoom, session.class_id)

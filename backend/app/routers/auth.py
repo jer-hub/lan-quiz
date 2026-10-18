@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import csv
-import io
 import logging
 from typing import Any
 
@@ -24,6 +22,7 @@ from app.auth import (
 from app.config import settings
 from app.database import get_db
 from app.models import ClassRoom, Student, User
+from app.roster import read_csv_rows
 from app.schemas import (
     AuthUserOut,
     MeOut,
@@ -163,27 +162,14 @@ async def import_teachers_csv(
     username,password,first_name,last_name,email,school_id,class_section.
     Only username/password are used (username lowercased, min 3 chars;
     password defaults to username, min 6 chars)."""
-    from app.routers.classes import MAX_CSV_ROWS, ROSTER_HEADERS
-
     try:
         raw = (await file.read()).decode("utf-8-sig")
     except Exception:
         raise HTTPException(status_code=400, detail="Could not read CSV (use UTF-8)")
-    reader = csv.DictReader(io.StringIO(raw))
-    if not reader.fieldnames:
-        raise HTTPException(status_code=400, detail="Empty CSV")
-    headers = [h.strip() if h else "" for h in reader.fieldnames]
-    if headers != ROSTER_HEADERS:
-        raise HTTPException(
-            status_code=400,
-            detail="CSV must have headers in order: " + ",".join(ROSTER_HEADERS),
-        )
-    data_rows = list(reader)
-    if len(data_rows) > MAX_CSV_ROWS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"CSV has more than {MAX_CSV_ROWS} data rows (max {MAX_CSV_ROWS})",
-        )
+    try:
+        data_rows = read_csv_rows(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     existing_result = await db.execute(select(User.username))
     existing = set(existing_result.scalars().all())
     seen_in_file: set[str] = set()
