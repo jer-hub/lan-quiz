@@ -46,6 +46,8 @@ class QuestionData:
     time_limit: int
     kind: str = "mc"
     answer_text: str | None = None
+    # The question's topics when the game was created; answers record these (ADR 0001).
+    topics: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -174,6 +176,7 @@ class GameSession:
                     "time_limit": q.time_limit,
                     "kind": q.kind,
                     "answer_text": q.answer_text,
+                    "topics": list(q.topics),
                 }
                 for q in self.questions
             ],
@@ -204,6 +207,7 @@ class GameSession:
                 time_limit=int(q.get("time_limit", 20)),
                 kind=str(q.get("kind", "mc")),
                 answer_text=q.get("answer_text"),
+                topics=list(q.get("topics", []) or []),
             )
             for q in data.get("questions", [])
         ]
@@ -748,9 +752,13 @@ class GameManager:
                     "kind": question.kind,
                     "options": list(question.options),
                     "correct_indices": list(question.correct_indices),
+                    "topics": list(question.topics),
                     "results": [
                         {
                             "sid": r["sid"],
+                            # Kept by student, not only sid: a player who rejoins gets a new sid.
+                            "student_id": session.players[r["sid"]].student_id,
+                            "answered": r["answered"],
                             "correct": r["correct"],
                             "option_index": r["option_index"],
                         }
