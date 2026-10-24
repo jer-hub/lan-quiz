@@ -29,10 +29,15 @@ export default function PlayPage() {
   const [nickname, setNickname] = useState("");
   const [studentCode, setStudentCode] = useState("");
   const [requiresCode, setRequiresCode] = useState(false);
+  const [password, setPassword] = useState("");
+  const [requiresPassword, setRequiresPassword] = useState(false);
+  // PIN whose class settings (peek) have been loaded; auto-rejoin waits for it.
+  const [pinInfoFor, setPinInfoFor] = useState<string | null>(null);
   const [teamMode, setTeamMode] = useState(false);
   const [teams, setTeams] = useState<string[]>([]);
   const [team, setTeam] = useState("");
   const [shortText, setShortText] = useState("");
+  const [orderSeq, setOrderSeq] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [lobby, setLobby] = useState<LobbyState | null>(null);
   const [mySid, setMySid] = useState<string | null>(null);
@@ -72,10 +77,15 @@ export default function PlayPage() {
 
   useEffect(() => {
     const p = pin.trim().toUpperCase();
-    if (p.length < 4) {
+    const resetPinInfo = () => {
       setRequiresCode(false);
+      setRequiresPassword(false);
       setTeamMode(false);
       setTeams([]);
+    };
+    if (p.length < 4) {
+      setPinInfoFor(null);
+      resetPinInfo();
       return;
     }
     const t = window.setTimeout(() => {
@@ -83,13 +93,14 @@ export default function PlayPage() {
         .peekPin(p)
         .then((info) => {
           setRequiresCode(info.requires_student_code);
+          setRequiresPassword(!!info.requires_password);
           setTeamMode(!!info.team_mode);
           setTeams(info.teams || []);
+          setPinInfoFor(p);
         })
         .catch(() => {
-          setRequiresCode(false);
-          setTeamMode(false);
-          setTeams([]);
+          resetPinInfo();
+          setPinInfoFor(p);
         });
     }, 300);
     return () => window.clearTimeout(t);
@@ -134,6 +145,7 @@ export default function PlayPage() {
     setQuestion(data);
     setSelected(null);
     setShortText("");
+    setOrderSeq([]);
     setLocked(false);
     setReveal(null);
     setLastPoints(null);
@@ -167,7 +179,8 @@ export default function PlayPage() {
     clearJoinSession();
   });
 
-  // Auto-rejoin on (re)connect using stored sid.
+  // Auto-rejoin on (re)connect using stored sid. A class that requires a password is never
+  // rejoined without one typed on this page: after a refresh the student re-enters it.
   useEffect(() => {
     if (!connected || rejoinedRef.current) return;
     const stored = loadJoinSession();
@@ -176,16 +189,21 @@ export default function PlayPage() {
     const currentPin = (pin || stored.pin).trim().toUpperCase();
     if (phase === "join" && !pin && stored.pin) setPin(stored.pin);
     if (phase !== "join" || stored.pin === currentPin) {
+      if (phase === "join" && pinInfoFor !== stored.pin) return; // class settings not loaded yet
+      if (requiresPassword && !password) return;
       rejoinedRef.current = true;
       if (phase !== "join") setReconnecting(true);
       socket.emit("join_game", {
         pin: stored.pin,
         nickname: stored.nickname,
         student_code: stored.student_code || undefined,
+        password: requiresPassword ? password : undefined,
         rejoin_sid: stored.sid,
       });
     }
-  }, [connected, socket, phase, pin]);
+    // `password` is left out on purpose: typing must not trigger an auto-rejoin.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, socket, phase, pin, pinInfoFor, requiresPassword]);
 
   useEffect(() => {
     if (connected) setReconnecting(false);
@@ -194,18 +212,24 @@ export default function PlayPage() {
 
   const join = useCallback(() => {
     setError(null);
+    const joinPin = pin.trim().toUpperCase();
+    // A stored session for this PIN is a reconnect: keep the score (the server still checks the password).
+    const stored = loadJoinSession();
     socket.emit("join_game", {
-      pin: pin.trim().toUpperCase(),
+      pin: joinPin,
       nickname: nickname.trim(),
       student_code: studentCode.trim().toUpperCase() || undefined,
+      password: requiresPassword ? password || undefined : undefined,
       team: teamMode ? team || undefined : undefined,
+      rejoin_sid: stored?.pin === joinPin ? stored.sid : undefined,
     });
-  }, [socket, pin, nickname, studentCode, teamMode, team]);
+  }, [socket, pin, nickname, studentCode, password, requiresPassword, teamMode, team]);
 
   const canJoin =
     connected &&
     pin.trim().length >= 4 &&
     (requiresCode ? studentCode.trim().length >= 1 : nickname.trim().length >= 1) &&
+    (!requiresPassword || password.length >= 1) &&
     (!teamMode || team.length >= 1);
 
   const submit = useCallback(
@@ -215,6 +239,21 @@ export default function PlayPage() {
       socket.emit("submit_answer", { option_index: optionIndex });
     },
     [locked, phase, socket],
+  );
+
+  // Ordering: tap options first-to-last; the full sequence is sent once every option is placed.
+  const placeOrder = useCallback(
+    (optionIndex: number, total: number) => {
+      if (locked || phase !== "question") return;
+      if (orderSeq.includes(optionIndex)) return;
+      const next = [...orderSeq, optionIndex];
+      setOrderSeq(next);
+      if (next.length === total) {
+        setSelected(-1);
+        socket.emit("submit_answer", { order: next });
+      }
+    },
+    [locked, phase, orderSeq, socket],
   );
 
   const submitShort = useCallback(() => {
@@ -308,6 +347,19 @@ export default function PlayPage() {
               <span className="mt-1 block text-xs text-ink/50">
                 {t.classGameNote}
               </span>
+              {requiresPassword ? (
+                <>
+                  <span className="mb-1 mt-3 block text-sm font-bold">{t.studentPassword}</span>
+                  <input
+                    type="password"
+                    className="w-full rounded-xl border border-sky-200 px-4 py-3 text-lg font-semibold"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    maxLength={128}
+                    autoComplete="current-password"
+                  />
+                </>
+              ) : null}
             </label>
           ) : (
             <label className="mt-4 block">
@@ -404,28 +456,41 @@ export default function PlayPage() {
             <div className="mt-6 grid grid-cols-2 gap-3">
               {question.options.map((opt, i) => {
                 const isSelected = selected === i;
+                const place = orderSeq.indexOf(i);
+                const isOrdering = question.kind === "ordering";
                 return (
                   <button
                     key={i}
                     type="button"
-                    disabled={locked}
-                    onClick={() => submit(i)}
+                    disabled={locked || (isOrdering && place >= 0)}
+                    onClick={() => (isOrdering ? placeOrder(i, question.options.length) : submit(i))}
                     className={`min-h-28 rounded-2xl p-4 text-left text-lg font-extrabold text-white shadow-md transition active:scale-[0.98] disabled:opacity-80 ${
                       isSelected ? "ring-4 ring-white ring-offset-2 ring-offset-sky-300" : ""
                     }`}
                     style={{ backgroundColor: COLORS[i % COLORS.length] }}
                   >
-                    <span className="mb-1 block text-2xl opacity-90">{OPTION_SHAPES[i]}</span>
+                    <span className="mb-1 block text-2xl opacity-90">
+                      {isOrdering && place >= 0 ? `#${place + 1}` : OPTION_SHAPES[i]}
+                    </span>
                     {opt}
                   </button>
                 );
               })}
             </div>
           )}
-          {question.kind === "ordering" && (
-            <p className="mt-3 text-center text-xs text-ink/50">
-              Ordering — tap the option that comes first (MVP).
-            </p>
+          {question.kind === "ordering" && !locked && (
+            <div className="mt-3 text-center text-xs text-ink/50">
+              <p>Ordering — tap the options from first to last.</p>
+              {orderSeq.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setOrderSeq([])}
+                  className="mt-1 underline"
+                >
+                  Start over
+                </button>
+              )}
+            </div>
           )}
           {phase === "waiting" && (
             <p className="mt-6 text-center font-bold text-brand-dark animate-pulse-soft">

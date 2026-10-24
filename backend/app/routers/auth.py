@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import csv
-import io
 import logging
 from typing import Any
 
@@ -21,8 +19,10 @@ from app.auth import (
     teacher_token,
     verify_password,
 )
+from app.config import settings
 from app.database import get_db
 from app.models import ClassRoom, Student, User
+from app.roster import read_csv_rows
 from app.schemas import (
     AuthUserOut,
     MeOut,
@@ -37,6 +37,13 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.post("/register", response_model=AuthUserOut, status_code=status.HTTP_201_CREATED)
 async def register_teacher(payload: TeacherRegister, db: AsyncSession = Depends(get_db)) -> AuthUserOut:
+    # Self-service registration closes once a teacher exists; re-open with ALLOW_TEACHER_REGISTRATION=true.
+    teacher_exists = await db.execute(select(User.id).where(User.role == "teacher").limit(1))
+    if teacher_exists.scalar_one_or_none() is not None and not settings.allow_teacher_registration:
+        raise HTTPException(
+            status_code=403,
+            detail="Teacher registration is closed. An administrator must add the account.",
+        )
     username = payload.username.strip().lower()
     if len(username) < 3:
         raise HTTPException(status_code=400, detail="Username too short")
@@ -155,27 +162,20 @@ async def import_teachers_csv(
     username,password,first_name,last_name,email,school_id,class_section.
     Only username/password are used (username lowercased, min 3 chars;
     password defaults to username, min 6 chars)."""
-    from app.routers.classes import ROSTER_HEADERS
-
     try:
         raw = (await file.read()).decode("utf-8-sig")
     except Exception:
         raise HTTPException(status_code=400, detail="Could not read CSV (use UTF-8)")
-    reader = csv.DictReader(io.StringIO(raw))
-    if not reader.fieldnames:
-        raise HTTPException(status_code=400, detail="Empty CSV")
-    headers = [h.strip() if h else "" for h in reader.fieldnames]
-    if headers != ROSTER_HEADERS:
-        raise HTTPException(
-            status_code=400,
-            detail="CSV must have headers in order: " + ",".join(ROSTER_HEADERS),
-        )
+    try:
+        data_rows = read_csv_rows(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     existing_result = await db.execute(select(User.username))
     existing = set(existing_result.scalars().all())
     seen_in_file: set[str] = set()
     added: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
-    for lineno, row in enumerate(reader, start=2):
+    for lineno, row in enumerate(data_rows, start=2):
         try:
             uname, pwd = validate_teacher_import_row(
                 row.get("username") or "", row.get("password") or ""

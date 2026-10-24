@@ -10,6 +10,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.auth import require_teacher
 from app.config import settings
@@ -27,6 +29,62 @@ from app.schemas import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quizzes", tags=["quizzes"])
+
+MAX_IMAGE_BYTES = 2_000_000
+UPLOAD_IMAGE_PATH = "/api/quizzes/upload-image"
+_MULTIPART_OVERHEAD = 64 * 1024  # boundaries and part headers around the file
+
+
+class ImageUploadSizeLimit:
+    """Refuse an oversized image upload while the body is still arriving.
+
+    Reads the request body chunk by chunk and stops at the limit, so the
+    multipart parser never receives more than about 2 MB. A declared
+    Content-Length over the limit is refused without reading the body.
+    The route still checks the exact file size.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] != UPLOAD_IMAGE_PATH:
+            await self.app(scope, receive, send)
+            return
+        limit = MAX_IMAGE_BYTES + _MULTIPART_OVERHEAD
+        declared = dict(scope.get("headers") or []).get(b"content-length")
+        try:
+            if declared is not None and int(declared) > limit:
+                await self._refuse(scope, receive, send)
+                return
+        except ValueError:
+            pass  # malformed header: fall back to counting the bytes
+        buffered: list[Message] = []
+        total = 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                return  # client disconnected
+            total += len(message.get("body", b""))
+            if total > limit:
+                await self._refuse(scope, receive, send)
+                return
+            buffered.append(message)
+            if not message.get("more_body", False):
+                break
+        pending_messages = list(buffered)
+
+        async def replay_receive() -> Message:
+            if pending_messages:
+                return pending_messages.pop(0)
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+    @staticmethod
+    async def _refuse(scope: Scope, receive: Receive, send: Send) -> None:
+        response = JSONResponse({"detail": "Image too large (max 2 MB)"}, status_code=413)
+        await response(scope, receive, send)
 
 
 def _options_to_json(options: list[str]) -> str:
@@ -225,7 +283,7 @@ async def upload_image(
 ) -> dict[str, Any]:
     """Teacher-only image upload (2MB, png/jpg/webp). Returns {url}."""
     data = await file.read()
-    if len(data) > 2_000_000:
+    if len(data) > MAX_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Image too large (max 2 MB)")
     ctype = (file.content_type or "").lower()
     if ctype not in ("image/png", "image/jpeg", "image/webp"):

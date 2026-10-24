@@ -7,6 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.roster import STUDENT_PASSWORD_MIN
+
 
 class QuestionCreate(BaseModel):
     text: str = Field(..., min_length=1, max_length=2000)
@@ -153,7 +155,14 @@ class ClassCreate(BaseModel):
 
 
 class ClassUpdate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=200)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    require_password: bool | None = None
+
+    @model_validator(mode="after")
+    def _needs_a_field(self) -> ClassUpdate:
+        if self.name is None and self.require_password is None:
+            raise ValueError("Send name or require_password")
+        return self
 
 
 class ClassOut(BaseModel):
@@ -161,18 +170,19 @@ class ClassOut(BaseModel):
     name: str
     join_code: str
     student_count: int
+    require_password: bool
     created_at: datetime
 
 
 class StudentCreate(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=120)
     student_code: str = Field(..., min_length=1, max_length=40)
-    password: str | None = Field(default=None, min_length=1, max_length=128)
+    password: str | None = Field(default=None, min_length=STUDENT_PASSWORD_MIN, max_length=128)
 
 
 class StudentUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=120)
-    password: str | None = Field(default=None, min_length=1, max_length=128)
+    password: str | None = Field(default=None, min_length=6, max_length=128)
 
 
 class StudentOut(BaseModel):
@@ -181,6 +191,13 @@ class StudentOut(BaseModel):
     display_name: str
     student_code: str
     created_at: datetime
+
+
+class StudentCreated(StudentOut):
+    """Response for a new student. generated_password is set only when the server
+    generated one, and is returned once here; it is never stored in readable form."""
+
+    generated_password: str | None = None
 
 
 class AssignmentCreate(BaseModel):
@@ -313,6 +330,7 @@ class AttemptAnswerIn(BaseModel):
     order_index: int = 0
     option_index: int | None = None
     answer_text: str | None = None
+    order: list[int] | None = None
 
 
 class AttemptOut(BaseModel):

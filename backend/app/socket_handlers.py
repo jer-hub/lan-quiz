@@ -11,7 +11,7 @@ import socketio
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.auth import decode_socket_token
+from app.auth import decode_socket_token, verify_password
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.game_manager import GameStatus, QuestionData, game_manager
@@ -20,6 +20,8 @@ from app.session_store import delete_snapshot, save_snapshot
 from app.utils.qr import generate_qr_data_url
 
 logger = logging.getLogger(__name__)
+
+UNKNOWN_STUDENT_ERROR = "Student code not found in this class roster."
 
 
 def register_socket_handlers(sio: socketio.AsyncServer) -> None:
@@ -75,12 +77,18 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
             session = game_manager.get_by_pin(pin)
             if not session or session.status.value != "question":
                 return
+            # Detach this task before finalizing: end_question cancels question_task,
+            # and cancelling the running task would abort the reveal tail below.
+            session.question_task = None
             await finalize_question(session)
         except asyncio.CancelledError:
             return
 
     async def finalize_question(session: Any) -> None:
         payload = await game_manager.end_question(session)
+        if payload is None:
+            # Already finalized by a racing path; don't re-emit the reveal.
+            return
         await sio.emit("question_ended", payload, room=session.pin)
         await game_manager.set_leaderboard_status(session)
         await save_snapshot(session)
@@ -345,6 +353,7 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
         pin = str(data.get("pin", "")).strip().upper()
         nickname = str(data.get("nickname", "")).strip()
         student_code = str(data.get("student_code", "")).strip().upper()
+        password = str(data.get("password", "") or "")
         rejoin_sid = str(data.get("rejoin_sid", "") or "").strip() or None
         team = str(data.get("team", "") or "").strip() or None
 
@@ -368,8 +377,16 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                 )
                 student = result.scalar_one_or_none()
                 if not student:
-                    await emit_error(sid, "Student code not found in this class roster.")
+                    await emit_error(sid, UNKNOWN_STUDENT_ERROR)
                     return
+
+                # Class password setting: a missing or wrong password gets the same
+                # error as an unknown code, so the response does not reveal which codes exist.
+                classroom = await db.get(ClassRoom, session_peek.class_id)
+                if classroom and classroom.require_password:
+                    if not password or not verify_password(password, student.password_hash):
+                        await emit_error(sid, UNKNOWN_STUDENT_ERROR)
+                        return
                 student_id = student.id
                 resolved_nick = student.display_name
 
@@ -516,9 +533,14 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
             except (TypeError, ValueError):
                 await emit_error(sid, "Invalid option_index")
                 return
+        raw_order = (data or {}).get("order")
+        order = raw_order if isinstance(raw_order, list) else None
         try:
             session, record, all_answered = await game_manager.submit_answer(
-                sid, option_index, str(raw_text) if raw_text is not None else None
+                sid,
+                option_index,
+                str(raw_text) if raw_text is not None else None,
+                order=order,
             )
         except ValueError as exc:
             await emit_error(sid, str(exc))

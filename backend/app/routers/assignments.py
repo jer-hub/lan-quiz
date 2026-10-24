@@ -17,7 +17,7 @@ from app.analysis import analyze_questions, load_history_questions
 from app.auth import require_student, require_teacher, get_current_principal, TokenPrincipal
 from app.config import settings
 from app.database import get_db
-from app.game_manager import calculate_score, game_manager, normalize_short_answer
+from app.game_manager import calculate_score, game_manager, is_permutation, normalize_short_answer
 from app.models import (
     Assignment,
     Attempt,
@@ -184,9 +184,10 @@ def _score_attempt(questions: list[Question], answers: list[AttemptAnswerIn], ba
                     q.answer_text or ""
                 )
             elif kind == "ordering":
-                # Homework sends full order? Accept single position for MVP parity with live.
-                if a.option_index is not None:
-                    correct = int(a.option_index) in list(correct_indices)
+                # Full sequence, same rule as live games: canonical order only.
+                correct = is_permutation(a.order, len(options)) and list(a.order) == list(
+                    range(len(options))
+                )
             else:
                 if a.option_index is not None and 0 <= int(a.option_index) < len(options):
                     correct = int(a.option_index) in list(correct_indices)
@@ -701,6 +702,7 @@ async def submit_attempt(
                     order_index=int(a.get("order_index", 0)),
                     option_index=a.get("option_index"),
                     answer_text=a.get("answer_text"),
+                    order=a.get("order") if isinstance(a.get("order"), list) else None,
                 )
             )
     questions = sorted(assignment.quiz.questions, key=lambda x: x.order_index)

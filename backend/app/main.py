@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import socketio
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -75,6 +75,8 @@ async def lifespan(_app: FastAPI):
 fastapi_app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 _cors_wildcard = settings.cors_origins.strip() == "*"
+# Added before CORS so CORS wraps it and the 413 still carries CORS headers.
+fastapi_app.add_middleware(quizzes.ImageUploadSizeLimit)
 fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if _cors_wildcard else settings.cors_origin_list,
@@ -121,6 +123,20 @@ register_socket_handlers(sio)
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app, socketio_path="socket.io")
 
 
+def resolve_spa_target(static_dir: Path, full_path: str) -> Path:
+    """Map a URL path to a file under static_dir, or index.html for client routes.
+
+    Raises 404 when the path resolves outside static_dir (path traversal).
+    """
+    root = static_dir.resolve()
+    candidate = (root / full_path).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise HTTPException(status_code=404, detail="Not found")
+    if full_path and candidate.is_file():
+        return candidate
+    return root / "index.html"
+
+
 def _mount_frontend() -> None:
     if not STATIC_DIR.exists():
         logger.warning("Static frontend not found at %s (dev mode?)", STATIC_DIR)
@@ -133,10 +149,7 @@ def _mount_frontend() -> None:
     @fastapi_app.get("/{full_path:path}")
     async def spa_fallback(full_path: str) -> FileResponse:
         # Do not swallow API routes (already registered above)
-        candidate = STATIC_DIR / full_path
-        if full_path and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(resolve_spa_target(STATIC_DIR, full_path))
 
 
 _mount_frontend()

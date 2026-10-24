@@ -14,23 +14,29 @@ from app.auth import require_teacher
 from app.config import settings
 from app.database import get_db
 from app.game_manager import game_manager
-from app.models import GameHistory, User
+from app.models import ClassRoom, GameHistory, User
 from app.schemas import GameHistoryOut
 
 router = APIRouter(prefix="/api/games", tags=["games"])
 
 
 @router.get("/pin/{pin}")
-async def peek_pin(pin: str) -> dict[str, Any]:
+async def peek_pin(pin: str, db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     """Public: inspect an active game PIN (for join form UX)."""
     session = game_manager.get_by_pin(pin.strip().upper())
     if not session:
         raise HTTPException(status_code=404, detail="No active game with that PIN")
+    # Class password setting: the join form shows a password field when the class requires one.
+    requires_password = False
+    if session.requires_student_code and session.class_id:
+        classroom = await db.get(ClassRoom, session.class_id)
+        requires_password = bool(classroom and classroom.require_password)
     return {
         "pin": session.pin,
         "quiz_title": session.quiz_title,
         "status": session.status.value,
         "requires_student_code": session.requires_student_code,
+        "requires_password": requires_password,
         "player_count": session.player_count(),
         "team_mode": session.team_mode,
         "teams": list(session.teams),

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import type { ClassOut, Gradebook, StudentOut } from "../shared";
+import { STUDENT_PASSWORD_MIN } from "../shared";
+import type { ClassOut, Gradebook, StudentCreated, StudentOut } from "../shared";
 
 export default function ClassDetailPage() {
   const { id } = useParams();
@@ -18,6 +19,8 @@ export default function ClassDetailPage() {
     added: number;
     skipped: Array<{ row: number; reason: string }>;
   } | null>(null);
+  // Generated passwords are kept only in this state, so they show once and are gone on reload.
+  const [newPasswords, setNewPasswords] = useState<StudentCreated[]>([]);
 
   const load = async () => {
     try {
@@ -36,15 +39,24 @@ export default function ClassDetailPage() {
   const addStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api.addStudent(classId, {
+      const created = await api.addStudent(classId, {
         display_name: displayName,
         student_code: studentCode,
       });
+      setNewPasswords(created.generated_password ? [created] : []);
       setDisplayName("");
       setStudentCode("");
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Add failed");
+    }
+  };
+
+  const togglePassword = async (required: boolean) => {
+    try {
+      setClassroom(await api.updateClass(classId, { require_password: required }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save setting");
     }
   };
 
@@ -57,8 +69,10 @@ export default function ClassDetailPage() {
   const onImport = async (file: File) => {
     try {
       setImportReport(null);
+      setNewPasswords([]);
       const res = await api.importRoster(classId, file);
       setImportReport({ added: res.added.length, skipped: res.skipped });
+      setNewPasswords(res.added.filter((s) => s.generated_password));
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Import failed");
@@ -104,6 +118,14 @@ export default function ClassDetailPage() {
         Class join code:{" "}
         <span className="font-mono text-xl font-bold tracking-wider">{classroom.join_code}</span>
       </p>
+      <label className="mt-3 flex items-center gap-2 text-ink/80">
+        <input
+          type="checkbox"
+          checked={classroom.require_password}
+          onChange={(e) => void togglePassword(e.target.checked)}
+        />
+        Require student password to join
+      </label>
       {error && <p className="mt-3 text-danger">{error}</p>}
 
       <section className="mt-8">
@@ -154,8 +176,27 @@ export default function ClassDetailPage() {
         </form>
         <p className="mt-2 text-xs text-ink/50">
           CSV headers in order: username,password,first_name,last_name,email,school_id,class_section
-          — code = username, name = first + last, blank password defaults to username
+          — code = username, name = first + last, blank password gets a generated one (shown once),
+          supplied passwords need {STUDENT_PASSWORD_MIN}+ characters
         </p>
+        {newPasswords.length > 0 && (
+          <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
+            <p className="font-bold">Generated passwords — shown once</p>
+            <p className="text-ink/70">
+              Hand these out now. They will not be shown again after you leave this page or import
+              another file.
+            </p>
+            <ul className="mt-2 space-y-1">
+              {newPasswords.map((s) => (
+                <li key={s.id} className="flex flex-wrap gap-x-3">
+                  <span className="font-bold">{s.display_name}</span>
+                  <span className="font-mono text-ink/60">{s.student_code}</span>
+                  <span className="font-mono font-bold">{s.generated_password}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {importReport && (
           <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm">
             <p className="font-bold">
