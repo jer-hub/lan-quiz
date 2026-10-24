@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.auth import hash_password, require_teacher
 from app.database import get_db
-from app.mastery import build_mastery_report
+from app.mastery import build_mastery_report, mastery_report_csv
 from app.models import ClassRoom, Student, User
 from app.roster import MAX_CSV_ROWS, ROSTER_HEADERS, STUDENT_PASSWORD_MIN, read_csv_rows
 from app.schemas import (
@@ -157,6 +157,21 @@ async def get_mastery_report(
     db: AsyncSession = Depends(get_db),
 ) -> MasteryReportOut:
     return await build_mastery_report(db, await _load_class(db, class_id, teacher))
+
+
+@router.get("/{class_id}/mastery/export")
+async def export_mastery_report_csv(
+    class_id: int,
+    teacher: User = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """The mastery report as CSV, built from the same report so the two never disagree."""
+    report = await build_mastery_report(db, await _load_class(db, class_id, teacher))
+    return Response(
+        content=mastery_report_csv(report),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="mastery-class-{class_id}.csv"'},
+    )
 
 
 @router.delete("/{class_id}", status_code=204)

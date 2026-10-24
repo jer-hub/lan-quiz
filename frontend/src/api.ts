@@ -224,6 +224,13 @@ export const api = {
 
   getGradebook: (classId: number) => request<Gradebook>(`/api/gradebook/${classId}`),
   getMasteryReport: (classId: number) => request<MasteryReport>(`/api/classes/${classId}/mastery`),
+  exportMasteryReport: async (classId: number) => {
+    const headers: Record<string, string> = {};
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
+    const res = await fetch(`/api/classes/${classId}/mastery/export`, { headers });
+    if (!res.ok) throw new Error("Export failed");
+    return res.blob();
+  },
   exportGradebook: async (classId: number) => {
     const headers: Record<string, string> = {};
     if (authToken) headers.Authorization = `Bearer ${authToken}`;
