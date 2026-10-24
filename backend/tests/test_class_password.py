@@ -30,7 +30,7 @@ def _columns(db_path: Path, table: str) -> dict[str, dict]:
 
 def test_migration_chain_is_linear_with_single_head():
     heads = ScriptDirectory.from_config(_alembic_cfg()).get_heads()
-    assert heads == ["0006_class_password"]
+    assert heads == ["0009_class_mastery_threshold"]
 
 
 def test_existing_classes_keep_working_with_password_setting_off(tmp_path, monkeypatch):

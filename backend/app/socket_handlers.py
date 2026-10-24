@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import socketio
@@ -15,6 +16,7 @@ from app.auth import decode_socket_token, verify_password
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.game_manager import GameStatus, QuestionData, game_manager
+from app.mastery import GivenAnswer, record_answers
 from app.models import Assignment, ClassRoom, GameHistory, GameResult, Quiz, Student
 from app.session_store import delete_snapshot, save_snapshot
 from app.utils.qr import generate_qr_data_url
@@ -66,10 +68,37 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                             rank=entry["rank"],
                         )
                     )
+                record_live_answers(db, session, history_id=row.id)
                 await db.commit()
             logger.info("Saved game history pin=%s players=%s", session.pin, session.player_count())
         except Exception:
             logger.exception("Failed to save game history")
+
+    def record_live_answers(db: Any, session: Any, *, history_id: int) -> None:
+        """Mastery evidence from a finished classroom game: each student's answer to each question played.
+
+        Guests (no student) and unanswered questions add nothing; team games count per student.
+        """
+        if session.class_id is None:
+            return
+        game_ended_at = datetime.now(timezone.utc)
+        for entry in session.question_history:
+            # Each answer counts as given when its question ended (snapshots from before
+            # this was kept fall back to the end of the game).
+            ended_raw = entry.get("ended_at")
+            answered_at = datetime.fromisoformat(ended_raw) if ended_raw else game_ended_at
+            for result in entry.get("results", []):
+                student_id = result.get("student_id")
+                if student_id is None or not result.get("answered"):
+                    continue
+                record_answers(
+                    db,
+                    student_id=student_id,
+                    class_id=session.class_id,
+                    answers=[GivenAnswer(topics=list(entry.get("topics", [])), correct=bool(result.get("correct")))],
+                    answered_at=answered_at,
+                    history_id=history_id,
+                )
 
     async def run_question_timer(pin: str, time_limit: int) -> None:
         try:
@@ -224,8 +253,6 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                     return
                 due = assignment.due_at
                 if due is not None:
-                    from datetime import datetime, timezone
-
                     due_aware = due if due.tzinfo else due.replace(tzinfo=timezone.utc)
                     if due_aware < datetime.now(timezone.utc):
                         await emit_error(
@@ -266,6 +293,7 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
                     time_limit=q.time_limit,
                     kind=q.kind or "mc",
                     answer_text=q.answer_text,
+                    topics=q.topic_names,
                 )
                 for q in quiz.questions
             ]
@@ -515,6 +543,10 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
 
     @sio.event
     async def end_game(sid: str, data: dict | None = None) -> None:
+        open_game = game_manager.get_by_sid(sid)
+        if open_game and open_game.host_sid == sid and open_game.status == GameStatus.QUESTION:
+            # Close the open question first so its answers reach the game history and mastery.
+            await game_manager.end_question(open_game)
         try:
             session = await game_manager.end_game(sid)
         except ValueError as exc:

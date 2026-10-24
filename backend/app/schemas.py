@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.roster import STUDENT_PASSWORD_MIN
+from app.topics import TOPIC_MAX_LENGTH, TOPICS_PER_QUESTION_MAX, normalize_topics
 
 
 class QuestionCreate(BaseModel):
@@ -18,6 +19,17 @@ class QuestionCreate(BaseModel):
     time_limit: int = Field(default=20, ge=5, le=120)
     kind: str = Field(default="mc", max_length=20)
     answer_text: str | None = Field(default=None, max_length=2000)
+    topics: list[str] = Field(default_factory=list)
+
+    @field_validator("topics")
+    @classmethod
+    def validate_topics(cls, v: list[str]) -> list[str]:
+        cleaned = normalize_topics(v)
+        if len(cleaned) > TOPICS_PER_QUESTION_MAX:
+            raise ValueError(f"At most {TOPICS_PER_QUESTION_MAX} topics per question")
+        if any(len(t) > TOPIC_MAX_LENGTH for t in cleaned):
+            raise ValueError(f"Topics are at most {TOPIC_MAX_LENGTH} characters")
+        return cleaned
 
     @field_validator("kind")
     @classmethod
@@ -157,11 +169,13 @@ class ClassCreate(BaseModel):
 class ClassUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     require_password: bool | None = None
+    # Whole-number percent, 1-100; strict so "80" or true are refused rather than coerced.
+    mastery_threshold: int | None = Field(default=None, ge=1, le=100, strict=True)
 
     @model_validator(mode="after")
     def _needs_a_field(self) -> ClassUpdate:
-        if self.name is None and self.require_password is None:
-            raise ValueError("Send name or require_password")
+        if self.name is None and self.require_password is None and self.mastery_threshold is None:
+            raise ValueError("Send name, require_password or mastery_threshold")
         return self
 
 
@@ -171,6 +185,7 @@ class ClassOut(BaseModel):
     join_code: str
     student_count: int
     require_password: bool
+    mastery_threshold: int
     created_at: datetime
 
 
@@ -350,3 +365,30 @@ class AttemptSubmitOut(BaseModel):
     total: int
     correct_count: int
     submitted_at: datetime | None = None
+
+
+class MasteryCell(BaseModel):
+    """One student's accuracy on one topic. accuracy is None when there are not enough answers."""
+
+    topic: str
+    answer_count: int
+    accuracy: float | None
+    mastered: bool
+
+
+class MasteryRow(BaseModel):
+    student_id: int
+    display_name: str
+    student_code: str
+    cells: list[MasteryCell]
+
+
+class MasteryReportOut(BaseModel):
+    class_id: int
+    class_name: str
+    mastery_threshold: int
+    window: int
+    min_answers: int
+    topics: list[str]
+    rows: list[MasteryRow]
+    answers_without_topics: int

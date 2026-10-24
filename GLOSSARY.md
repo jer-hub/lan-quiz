@@ -43,3 +43,24 @@ The per-class table of each student's score on each assignment, combining live p
 
 **Item analysis**
 Per-question statistics for a past live game: percentage correct and answer distribution.
+
+## Mastery
+
+**Topic**
+A teacher-chosen label for what a question tests, such as "fractions". Groups questions across quizzes.
+_Avoid_: tag, skill, category
+
+**Accuracy**
+The percentage of a student's most recent answers on a topic that were correct. Counts correctness only, never points or speed.
+_Avoid_: mastery score, topic score
+
+**Mastered**
+A topic whose accuracy for a student is at or above the class's mastery threshold.
+_Avoid_: passed, proficient
+
+**Mastery threshold**
+The accuracy at which a topic counts as mastered for a class. 80% unless the teacher changes it.
+
+**Mastery report**
+A teacher's per-class view of each student's accuracy on each topic, with mastered topics marked.
+_Avoid_: progress report, skills report

@@ -10,6 +10,7 @@ export interface Question {
   order_index?: number;
   kind?: QuestionKind;
   answer_text?: string | null;
+  topics?: string[];
 }
 
 export interface QuizSummary {
@@ -160,6 +161,7 @@ export interface ClassOut {
   join_code: string;
   student_count: number;
   require_password: boolean;
+  mastery_threshold: number;
   created_at: string;
 }
 
@@ -242,6 +244,32 @@ export interface Gradebook {
   class_name: string;
   assignments: Assignment[];
   rows: GradebookRow[];
+}
+
+/** One student's accuracy on one topic. accuracy is null when there are not enough answers. */
+export interface MasteryCell {
+  topic: string;
+  answer_count: number;
+  accuracy: number | null;
+  mastered: boolean;
+}
+
+export interface MasteryRow {
+  student_id: number;
+  display_name: string;
+  student_code: string;
+  cells: MasteryCell[];
+}
+
+export interface MasteryReport {
+  class_id: number;
+  class_name: string;
+  mastery_threshold: number;
+  window: number;
+  min_answers: number;
+  topics: string[];
+  rows: MasteryRow[];
+  answers_without_topics: number;
 }
 
 export interface QuestionAnalysis {
@@ -366,3 +394,19 @@ export const OPTION_SHAPES = ["▲", "◆", "●", "■", "★", "✦"] as const
 
 /** Minimum length for a supplied student password. Matches the backend (app/roster.py). */
 export const STUDENT_PASSWORD_MIN = 6;
+
+/** Longest topic name. Matches the backend (TOPIC_MAX_LENGTH in app/topics.py). */
+export const TOPIC_MAX_LENGTH = 80;
+
+/** What the mastery report shows for a topic with too few answers. Matches the CSV export (app/mastery.py). */
+export const NOT_ENOUGH_ANSWERS = "not enough answers";
+
+/** Hands a downloaded file to the browser to save under this name. */
+export function saveDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}

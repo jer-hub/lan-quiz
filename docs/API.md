@@ -31,16 +31,54 @@ OpenAPI interactive docs (when not overridden by SPA): try `/docs` in developmen
 | DELETE | `/api/quizzes/{id}` | Delete (also removes linked assignments) |
 | GET | `/api/quizzes/{id}/export` | Export JSON |
 | POST | `/api/quizzes/import` | Import JSON body (`QuizImport`) |
+| GET | `/api/quizzes/topics` | The teacher's topics, as a list of names (suggestions for the question editor) |
+
+Every question carries `topics`: a list of topic names (optional on input, default `[]`). It is accepted on create (`POST /api/quizzes`), update (`PUT /api/quizzes/{id}`) and import (`POST /api/quizzes/import`), and returned by get and export. Names are trimmed with internal spaces collapsed, and names differing only in case are one topic; at most 10 topics per question, each at most 80 characters. A topic new to the teacher is added to their topics; an existing one keeps the teacher's first spelling.
 
 ## Classes (teacher)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET/POST | `/api/classes` | List / create |
-| GET/PUT/DELETE | `/api/classes/{id}` | Read / rename / delete |
+| GET/PUT/DELETE | `/api/classes/{id}` | Read / update / delete. PUT body: any of `name`, `require_password`, `mastery_threshold` (at least one) |
 | GET/POST | `/api/classes/{id}/students` | List / add |
 | PUT/DELETE | `/api/classes/{id}/students/{sid}` | Update / remove |
 | POST | `/api/classes/{id}/students/import` | CSV multipart `file` |
+| GET | `/api/classes/{id}/mastery` | Mastery report (JSON, below) |
+| GET | `/api/classes/{id}/mastery/export` | Mastery report as CSV download (`mastery-class-{id}.csv`) |
+
+`mastery_threshold` is the percent accuracy at which a topic counts as mastered: a whole number from 1 to 100 (default 80). It must be a JSON integer; `"80"` or `true` is refused with 422.
+
+### Mastery report
+
+`GET /api/classes/{id}/mastery` returns each current student's accuracy on each topic, from their answers in homework attempts and classroom live games:
+
+```json
+{
+  "class_id": 1,
+  "class_name": "Period 1",
+  "mastery_threshold": 80,
+  "window": 10,
+  "min_answers": 3,
+  "topics": ["Decimals", "Fractions"],
+  "rows": [
+    {
+      "student_id": 7,
+      "display_name": "Ada",
+      "student_code": "ADA01",
+      "cells": [
+        { "topic": "Decimals", "answer_count": 2, "accuracy": null, "mastered": false },
+        { "topic": "Fractions", "answer_count": 5, "accuracy": 80.0, "mastered": true }
+      ]
+    }
+  ],
+  "answers_without_topics": 3
+}
+```
+
+Accuracy is over the student's most recent `window` answers on the topic, rounded to one decimal. With fewer than `min_answers` answers, `accuracy` is `null` ("not enough answers"). `answers_without_topics` counts answers on questions that had no topics; they are not in the table.
+
+The CSV export has columns `student_code`, `display_name`, then one per topic; a cell is the accuracy (`80%`), marked `80% mastered` when mastered, or `not enough answers`.
 
 ## Assignments
 
@@ -64,6 +102,8 @@ OpenAPI interactive docs (when not overridden by SPA): try `/docs` in developmen
 |--------|------|------|-------------|
 | GET | `/api/gradebook/{class_id}` | Teacher | Matrix of scores |
 | GET | `/api/gradebook/{class_id}/export` | Teacher | CSV download |
+
+In both CSV exports (gradebook and mastery report), a text cell starting with `=`, `+`, `-` or `@` is prefixed with a single quote so spreadsheets keep it as text.
 
 ## Games (REST)
 

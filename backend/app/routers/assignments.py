@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import csv
-import io
 import logging
 from datetime import datetime, timezone
 
@@ -18,6 +16,8 @@ from app.auth import require_student, require_teacher, get_current_principal, To
 from app.config import settings
 from app.database import get_db
 from app.game_manager import calculate_score, game_manager, is_permutation, normalize_short_answer
+from app.mastery import GivenAnswer, record_answers
+from app.utils.csv_export import export_csv
 from app.models import (
     Assignment,
     Attempt,
@@ -195,7 +195,7 @@ def _score_attempt(questions: list[Question], answers: list[AttemptAnswerIn], ba
         total += pts
         if correct:
             correct_count += 1
-        details.append({"order_index": i, "correct": correct, "points": pts})
+        details.append({"order_index": i, "answered": a is not None, "correct": correct, "points": pts})
     return total, correct_count, details
 
 
@@ -706,10 +706,23 @@ async def submit_attempt(
                 )
             )
     questions = sorted(assignment.quiz.questions, key=lambda x: x.order_index)
-    total, correct_count, _ = _score_attempt(questions, answers, settings.score_base)
+    total, correct_count, details = _score_attempt(questions, answers, settings.score_base)
     attempt.score = total
     attempt.answers_json = _json.dumps([a.model_dump() for a in answers], ensure_ascii=False)
     attempt.submitted_at = datetime.now(timezone.utc)
+    # Mastery evidence: each answered question's topics and correctness as of this submit (ADR 0001).
+    record_answers(
+        db,
+        student_id=student.id,
+        class_id=assignment.class_id,
+        answers=[
+            GivenAnswer(topics=q.topic_names, correct=d["correct"])
+            for q, d in zip(questions, details)
+            if d["answered"]
+        ],
+        answered_at=attempt.submitted_at,
+        attempt_id=attempt.id,
+    )
     await db.commit()
     await db.refresh(attempt)
     return AttemptSubmitOut(
@@ -847,21 +860,19 @@ async def export_gradebook_csv(
         raise HTTPException(status_code=404, detail="Class not found")
     book = await _build_gradebook(db, classroom)
 
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    header = ["student_code", "display_name"] + [a.title for a in book.assignments] + ["total"]
-    writer.writerow(header)
+    lines: list[list[object]] = [
+        ["student_code", "display_name"] + [a.title for a in book.assignments] + ["total"]
+    ]
     for row in book.rows:
-        line = [row.student_code, row.display_name]
+        line: list[object] = [row.student_code, row.display_name]
         for cell in row.scores:
             line.append("" if cell.score is None else cell.score)
         line.append(row.total)
-        writer.writerow(line)
+        lines.append(line)
 
-    buf.seek(0)
     filename = f"gradebook-class-{class_id}.csv"
     return StreamingResponse(
-        iter([buf.getvalue()]),
+        iter([export_csv(lines)]),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

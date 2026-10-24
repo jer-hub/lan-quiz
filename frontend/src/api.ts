@@ -12,6 +12,7 @@ import type {
   GameHistory,
   GameInfo,
   Gradebook,
+  MasteryReport,
   MeResponse,
   PinPeek,
   QuestionAnalysis,
@@ -77,6 +78,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Fetches a CSV export as a file to save. */
+async function downloadCsv(url: string): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error("Export failed");
+  return res.blob();
+}
+
 export const api = {
   health: () =>
     request<{ status: string; app: string; public_base_url?: string; host_ip_is_loopback?: boolean }>(
@@ -110,6 +120,7 @@ export const api = {
 
   listQuizzes: () => request<QuizSummary[]>("/api/quizzes"),
   getQuiz: (id: number) => request<Quiz>(`/api/quizzes/${id}`),
+  listTopics: () => request<string[]>("/api/quizzes/topics"),
   createQuiz: (body: unknown) =>
     request<Quiz>("/api/quizzes", { method: "POST", body: JSON.stringify(body) }),
   updateQuiz: (id: number, body: unknown) =>
@@ -140,7 +151,10 @@ export const api = {
   createClass: (body: { name: string }) =>
     request<ClassOut>("/api/classes", { method: "POST", body: JSON.stringify(body) }),
   getClass: (id: number) => request<ClassOut>(`/api/classes/${id}`),
-  updateClass: (id: number, body: { name?: string; require_password?: boolean }) =>
+  updateClass: (
+    id: number,
+    body: { name?: string; require_password?: boolean; mastery_threshold?: number },
+  ) =>
     request<ClassOut>(`/api/classes/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteClass: (id: number) => request<void>(`/api/classes/${id}`, { method: "DELETE" }),
   listStudents: (classId: number) =>
@@ -221,13 +235,9 @@ export const api = {
     }),
 
   getGradebook: (classId: number) => request<Gradebook>(`/api/gradebook/${classId}`),
-  exportGradebook: async (classId: number) => {
-    const headers: Record<string, string> = {};
-    if (authToken) headers.Authorization = `Bearer ${authToken}`;
-    const res = await fetch(`/api/gradebook/${classId}/export`, { headers });
-    if (!res.ok) throw new Error("Export failed");
-    return res.blob();
-  },
+  getMasteryReport: (classId: number) => request<MasteryReport>(`/api/classes/${classId}/mastery`),
+  exportMasteryReport: (classId: number) => downloadCsv(`/api/classes/${classId}/mastery/export`),
+  exportGradebook: (classId: number) => downloadCsv(`/api/gradebook/${classId}/export`),
 
   getAiPresets: () => request<AiPresets>("/api/ai/presets"),
   extractText: (file: File) => {

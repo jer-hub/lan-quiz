@@ -16,7 +16,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app.auth import require_teacher
 from app.config import settings
 from app.database import get_db
-from app.models import Assignment, Question, Quiz, User
+from app.models import Assignment, Question, QuestionTopic, Quiz, User
 from app.schemas import (
     QuizCreate,
     QuizImport,
@@ -26,6 +26,7 @@ from app.schemas import (
     QuestionCreate,
     QuestionOut,
 )
+from app.topics import list_teacher_topics, resolve_topics
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quizzes", tags=["quizzes"])
@@ -106,6 +107,7 @@ def _question_to_out(q: Question) -> QuestionOut:
         order_index=q.order_index,
         kind=q.kind or "mc",
         answer_text=q.answer_text,
+        topics=q.topic_names,
     )
 
 
@@ -133,9 +135,12 @@ async def _load_owned_quiz(db: AsyncSession, quiz_id: int, teacher: User) -> Qui
     return quiz
 
 
-def _replace_questions(quiz: Quiz, questions: list[QuestionCreate]) -> None:
+async def _replace_questions(
+    db: AsyncSession, quiz: Quiz, teacher: User, questions: list[QuestionCreate]
+) -> None:
     quiz.questions.clear()
     for i, q in enumerate(questions):
+        topics = await resolve_topics(db, teacher.id, q.topics)
         quiz.questions.append(
             Question(
                 text=q.text,
@@ -146,6 +151,7 @@ def _replace_questions(quiz: Quiz, questions: list[QuestionCreate]) -> None:
                 order_index=i,
                 kind=q.kind,
                 answer_text=q.answer_text,
+                topic_links=[QuestionTopic(topic=t, position=pos) for pos, t in enumerate(topics)],
             )
         )
 
@@ -176,6 +182,15 @@ async def list_quizzes(
     ]
 
 
+@router.get("/topics", response_model=list[str])
+async def list_topics(
+    teacher: User = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> list[str]:
+    """The teacher's topics, for suggestions in the question editor."""
+    return await list_teacher_topics(db, teacher.id)
+
+
 @router.post("", response_model=QuizOut, status_code=status.HTTP_201_CREATED)
 async def create_quiz(
     payload: QuizCreate,
@@ -183,7 +198,7 @@ async def create_quiz(
     db: AsyncSession = Depends(get_db),
 ) -> QuizOut:
     quiz = Quiz(title=payload.title, description=payload.description, teacher_id=teacher.id)
-    _replace_questions(quiz, payload.questions)
+    await _replace_questions(db, quiz, teacher, payload.questions)
     db.add(quiz)
     await db.commit()
     quiz = await _load_owned_quiz(db, quiz.id, teacher)
@@ -198,7 +213,7 @@ async def import_quiz(
     db: AsyncSession = Depends(get_db),
 ) -> QuizOut:
     quiz = Quiz(title=payload.title, description=payload.description, teacher_id=teacher.id)
-    _replace_questions(quiz, payload.questions)
+    await _replace_questions(db, quiz, teacher, payload.questions)
     db.add(quiz)
     await db.commit()
     quiz = await _load_owned_quiz(db, quiz.id, teacher)
@@ -228,7 +243,7 @@ async def update_quiz(
     if payload.description is not None:
         quiz.description = payload.description
     if payload.questions is not None:
-        _replace_questions(quiz, payload.questions)
+        await _replace_questions(db, quiz, teacher, payload.questions)
     await db.commit()
     quiz = await _load_owned_quiz(db, quiz_id, teacher)
     return _quiz_to_out(quiz)
@@ -270,6 +285,7 @@ async def export_quiz(
                 "time_limit": q.time_limit,
                 "kind": q.kind or "mc",
                 "answer_text": q.answer_text,
+                "topics": q.topic_names,
             }
             for q in quiz.questions
         ],
