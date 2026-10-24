@@ -79,6 +79,48 @@ class Question(Base):
     answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     quiz: Mapped[Quiz] = relationship("Quiz", back_populates="questions")
+    # Loaded with every question (selectin) so callers can read topic_names without extra queries.
+    topic_links: Mapped[list[QuestionTopic]] = relationship(
+        "QuestionTopic",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="QuestionTopic.position",
+    )
+
+    @property
+    def topic_names(self) -> list[str]:
+        """This question's topics, in the order the teacher gave them."""
+        return [link.topic.name for link in self.topic_links]
+
+
+class Topic(Base):
+    """A teacher's label for what a question tests. Normalization lives in app.topics."""
+
+    __tablename__ = "topics"
+    __table_args__ = (UniqueConstraint("teacher_id", "key", name="uq_teacher_topic_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    teacher_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Display name: trimmed, internal whitespace collapsed, first spelling the teacher used.
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    # Case-insensitive identity of the topic within the teacher's topics.
+    key: Mapped[str] = mapped_column(String(80), nullable=False)
+
+
+class QuestionTopic(Base):
+    """Link between a question and one of its topics, in the order the teacher gave them."""
+
+    __tablename__ = "question_topics"
+
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="CASCADE"), primary_key=True
+    )
+    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    topic: Mapped[Topic] = relationship("Topic", lazy="selectin")
 
 
 class ClassRoom(Base):

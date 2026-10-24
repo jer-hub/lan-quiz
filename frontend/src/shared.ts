@@ -10,6 +10,7 @@ export interface Question {
   order_index?: number;
   kind?: QuestionKind;
   answer_text?: string | null;
+  topics?: string[];
 }
 
 export interface QuizSummary {

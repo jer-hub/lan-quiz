@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 import AiQuizGenerator from "../components/AiQuizGenerator";
+import TopicInput from "../components/TopicInput";
 import type { Question, QuestionKind } from "../shared";
 
 const emptyQuestion = (): Question => ({
@@ -12,6 +13,7 @@ const emptyQuestion = (): Question => ({
   time_limit: 20,
   kind: "mc",
   answer_text: null,
+  topics: [],
 });
 
 export default function QuizEditor() {
@@ -25,6 +27,12 @@ export default function QuizEditor() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(!isNew);
+  const [topicSuggestions, setTopicSuggestions] = useState<string[]>([]);
+
+  useEffect(() => {
+    // Suggestions are optional; the editor works without them.
+    void api.listTopics().then(setTopicSuggestions, () => setTopicSuggestions([]));
+  }, []);
 
   useEffect(() => {
     if (isNew) return;
@@ -43,6 +51,7 @@ export default function QuizEditor() {
             time_limit: q.time_limit,
             kind: (q.kind as QuestionKind) || "mc",
             answer_text: q.answer_text ?? null,
+            topics: q.topics ?? [],
           })),
         );
       } catch (e) {
@@ -188,6 +197,7 @@ export default function QuizEditor() {
                   time_limit: q.time_limit || 20,
                   kind: (q.kind as QuestionKind) || "mc",
                   answer_text: q.answer_text ?? null,
+                  topics: q.topics ?? [],
                 }))
               : [emptyQuestion()],
           );
@@ -238,6 +248,12 @@ export default function QuizEditor() {
               value={q.text}
               onChange={(e) => updateQuestion(qi, { text: e.target.value })}
               placeholder="Question text"
+            />
+            <TopicInput
+              id={`question-${qi}-topics`}
+              topics={q.topics ?? []}
+              suggestions={topicSuggestions}
+              onChange={(topics) => updateQuestion(qi, { topics })}
             />
             <div className="mb-3 flex flex-wrap items-center gap-3">
               <label className="text-sm font-bold">

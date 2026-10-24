@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.roster import STUDENT_PASSWORD_MIN
+from app.topics import TOPIC_MAX_LENGTH, TOPICS_PER_QUESTION_MAX, normalize_topics
 
 
 class QuestionCreate(BaseModel):
@@ -18,6 +19,17 @@ class QuestionCreate(BaseModel):
     time_limit: int = Field(default=20, ge=5, le=120)
     kind: str = Field(default="mc", max_length=20)
     answer_text: str | None = Field(default=None, max_length=2000)
+    topics: list[str] = Field(default_factory=list)
+
+    @field_validator("topics")
+    @classmethod
+    def validate_topics(cls, v: list[str]) -> list[str]:
+        cleaned = normalize_topics(v)
+        if len(cleaned) > TOPICS_PER_QUESTION_MAX:
+            raise ValueError(f"At most {TOPICS_PER_QUESTION_MAX} topics per question")
+        if any(len(t) > TOPIC_MAX_LENGTH for t in cleaned):
+            raise ValueError(f"Topics are at most {TOPIC_MAX_LENGTH} characters")
+        return cleaned
 
     @field_validator("kind")
     @classmethod

@@ -110,6 +110,7 @@ export const api = {
 
   listQuizzes: () => request<QuizSummary[]>("/api/quizzes"),
   getQuiz: (id: number) => request<Quiz>(`/api/quizzes/${id}`),
+  listTopics: () => request<string[]>("/api/quizzes/topics"),
   createQuiz: (body: unknown) =>
     request<Quiz>("/api/quizzes", { method: "POST", body: JSON.stringify(body) }),
   updateQuiz: (id: number, body: unknown) =>
