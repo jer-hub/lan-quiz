@@ -205,9 +205,9 @@ async def test_a_topic_at_or_above_80_percent_is_mastered_and_below_is_not(clien
     assert (bea_cell["accuracy"], bea_cell["mastered"]) == (60, False)
 
 
-async def test_answers_on_untagged_questions_are_left_out_of_the_table_and_counted(client):
+async def test_answers_on_questions_without_topics_are_left_out_of_the_table_and_counted(client):
     room = await Classroom.create(
-        client, "t_untagged", [_question("Q1", ["Fractions"]), _question("Q2"), _question("Q3")]
+        client, "t_no_topics", [_question("Q1", ["Fractions"]), _question("Q2"), _question("Q3")]
     )
     ada = await room.add_student("Ada", "ada01")
     bea = await room.add_student("Bea", "bea01")
@@ -217,15 +217,15 @@ async def test_answers_on_untagged_questions_are_left_out_of_the_table_and_count
 
     report = await room.mastery_report()
     assert report["topics"] == ["Fractions"]
-    assert report["untagged_answer_count"] == 3
+    assert report["answers_without_topics"] == 3
 
 
-async def test_retagging_a_question_after_an_attempt_does_not_change_that_attempts_topics(client):
-    room = await Classroom.create(client, "t_retag", [_question(f"Q{i}", ["Fractions"]) for i in range(1, 4)])
+async def test_changing_a_questions_topics_after_an_attempt_does_not_change_that_attempts_topics(client):
+    room = await Classroom.create(client, "t_new_topics", [_question(f"Q{i}", ["Fractions"]) for i in range(1, 4)])
     ada = await room.add_student("Ada", "ada01")
     await room.submit_attempt(ada, [RIGHT, RIGHT, RIGHT])
 
-    # The teacher re-tags every question; editing a quiz replaces its questions.
+    # The teacher changes every question's topics; editing a quiz replaces its questions.
     questions = room.quiz["questions"]
     for q in questions:
         q["topics"] = ["Decimals"]
@@ -266,7 +266,7 @@ async def test_a_student_no_longer_on_the_roster_does_not_appear(client):
 
     report = await room.mastery_report()
     assert [r["student_id"] for r in report["rows"]] == [bea["id"]]
-    assert report["untagged_answer_count"] == 0
+    assert report["answers_without_topics"] == 0
 
 
 async def test_another_teacher_cannot_read_the_report(client):

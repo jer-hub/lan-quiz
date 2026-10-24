@@ -1,4 +1,4 @@
-"""Topics on questions (#13): teachers tag questions with topics that carry through edit, import and export."""
+"""Topics on questions (#13): teachers give questions topics that carry through edit, import and export."""
 
 from pathlib import Path
 
@@ -118,7 +118,7 @@ async def test_editing_a_quiz_keeps_the_topics_sent_for_each_question(client):
 
 
 async def test_editing_a_quiz_can_change_a_questions_topics(client):
-    headers = await _teacher(client, "t_retag")
+    headers = await _teacher(client, "t_new_topics")
     quiz = await _create_quiz(client, headers, [_question("Q1", ["Fractions"])])
 
     questions = quiz["questions"]

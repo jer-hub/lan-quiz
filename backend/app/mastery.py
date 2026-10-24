@@ -95,11 +95,11 @@ async def build_mastery_report(db: AsyncSession, classroom: ClassRoom) -> Master
     # (student, topic key) -> correctness of each answer, most recent first.
     answers: dict[tuple[int, str], list[bool]] = {}
     names: dict[str, str] = {}
-    untagged = 0
+    without_topics = 0
     for record in result.scalars().all():
         topics = json.loads(record.topics_json or "[]")
         if not topics:
-            untagged += 1
+            without_topics += 1
         for name in topics:
             key = topic_key(name)
             names.setdefault(key, name)
@@ -129,7 +129,7 @@ async def build_mastery_report(db: AsyncSession, classroom: ClassRoom) -> Master
         min_answers=MASTERY_MIN_ANSWERS,
         topics=[names[k] for k in topic_keys],
         rows=rows,
-        untagged_answer_count=untagged,
+        answers_without_topics=without_topics,
     )
 
 

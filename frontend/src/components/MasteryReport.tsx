@@ -192,12 +192,12 @@ export default function MasteryReport({ classId }: { classId: number }) {
         </div>
       ) : (
         <p className="mt-3 text-ink/50">
-          No answers on tagged questions yet. Add topics to questions, then assign the quiz as homework.
+          No answers on questions with topics yet. Add topics to questions, then assign the quiz as homework.
         </p>
       )}
       <p className="mt-3 text-sm text-ink/60">
-        {report.untagged_answer_count} answer{report.untagged_answer_count === 1 ? " was" : "s were"} on
-        questions without topics and {report.untagged_answer_count === 1 ? "is" : "are"} not in this report.
+        {report.answers_without_topics} answer{report.answers_without_topics === 1 ? " was" : "s were"} on
+        questions without topics and {report.answers_without_topics === 1 ? "is" : "are"} not in this report.
       </p>
       <ExportCsvButton classId={classId} />
     </div>

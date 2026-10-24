@@ -275,7 +275,7 @@ class AnswerRecord(Base):
         ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True
     )
     class_id: Mapped[int] = mapped_column(ForeignKey("classes.id", ondelete="CASCADE"), nullable=False, index=True)
-    # The question's topic names when it was answered, as a JSON list; [] for an untagged question.
+    # The question's topic names when it was answered, as a JSON list; [] for a question without topics.
     topics_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False)  # homework|live

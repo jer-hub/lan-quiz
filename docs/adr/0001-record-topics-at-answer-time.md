@@ -4,7 +4,7 @@ Mastery is measured per topic, and an answer counts toward the topics its questi
 
 ## Consequences
 
-- Answers given before a question was tagged never count toward mastery. Re-tagging a question changes only future answers.
+- Answers given before a question had topics never count toward mastery. Changing a question's topics changes only future answers.
 - Correctness for homework attempts is fixed at submit time, so fixing a wrong answer key does not regrade past attempts.
 
 ## Considered options

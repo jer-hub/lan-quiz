@@ -269,7 +269,7 @@ export interface MasteryReport {
   min_answers: number;
   topics: string[];
   rows: MasteryRow[];
-  untagged_answer_count: number;
+  answers_without_topics: number;
 }
 
 export interface QuestionAnalysis {

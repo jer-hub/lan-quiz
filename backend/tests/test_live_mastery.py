@@ -119,7 +119,7 @@ def _sockets_use_test_db(monkeypatch):
     monkeypatch.setattr(socket_handlers, "AsyncSessionLocal", lambda: database.AsyncSessionLocal())
 
 
-async def test_a_tagged_question_answered_in_a_finished_classroom_game_counts(client):
+async def test_a_question_with_topics_answered_in_a_finished_classroom_game_counts(client):
     room = await Classroom.create(client, "t_live", [_question(f"Q{i}", ["Fractions"]) for i in range(1, 5)])
     ada = await room.add_student("Ada", "ADA01")
     game = await LiveGame.host(room)
@@ -142,7 +142,7 @@ async def test_a_guest_players_answers_do_not_count(client):
 
     report = await room.mastery_report()
     assert report["topics"] == []
-    assert report["untagged_answer_count"] == 0
+    assert report["answers_without_topics"] == 0
 
 
 async def test_team_mode_answers_count_for_each_student(client):
@@ -249,12 +249,12 @@ async def test_ending_the_game_while_a_question_is_open_keeps_that_questions_ans
 
 
 async def test_a_live_answer_records_the_topics_the_question_had_when_the_game_was_hosted(client):
-    room = await Classroom.create(client, "t_retag_live", [_question(f"Q{i}", ["Fractions"]) for i in range(1, 4)])
+    room = await Classroom.create(client, "t_new_topics_live", [_question(f"Q{i}", ["Fractions"]) for i in range(1, 4)])
     ada = await room.add_student("Ada", "ADA01")
     game = await LiveGame.host(room)
     await game.join("ADA", code="ADA01")
 
-    # The teacher re-tags the quiz while the game is in its lobby.
+    # The teacher changes the quiz's topics while the game is in its lobby.
     questions = room.quiz["questions"]
     for q in questions:
         q["topics"] = ["Decimals"]

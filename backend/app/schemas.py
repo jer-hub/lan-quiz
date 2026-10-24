@@ -391,4 +391,4 @@ class MasteryReportOut(BaseModel):
     min_answers: int
     topics: list[str]
     rows: list[MasteryRow]
-    untagged_answer_count: int
+    answers_without_topics: int
