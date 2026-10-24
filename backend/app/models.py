@@ -278,7 +278,7 @@ class AnswerRecord(Base):
     # The question's topic names when it was answered, as a JSON list; [] for a question without topics.
     topics_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    source: Mapped[str] = mapped_column(String(20), nullable=False)  # homework|live
+    source: Mapped[str] = mapped_column(String(20), nullable=False)  # app.mastery.ANSWER_SOURCE_HOMEWORK or ANSWER_SOURCE_LIVE
     # The homework attempt or game history the answer came from; evidence outlives either.
     attempt_id: Mapped[int | None] = mapped_column(
         ForeignKey("attempts.id", ondelete="SET NULL"), nullable=True

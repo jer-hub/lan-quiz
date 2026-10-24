@@ -22,6 +22,10 @@ from app.utils.csv_export import export_csv
 MASTERY_WINDOW = 10  # accuracy is over a student's most recent answers on a topic, at most this many
 MASTERY_MIN_ANSWERS = 3  # with fewer answers on a topic, the report says "not enough answers"
 
+# Where an answer record came from (AnswerRecord.source).
+ANSWER_SOURCE_HOMEWORK = "homework"
+ANSWER_SOURCE_LIVE = "live"
+
 
 @dataclass(frozen=True)
 class GivenAnswer:
@@ -45,7 +49,7 @@ def record_answers(
 
     Pass attempt_id for a homework attempt or history_id for a live game.
     """
-    source = "homework" if attempt_id is not None else "live"
+    source = ANSWER_SOURCE_HOMEWORK if attempt_id is not None else ANSWER_SOURCE_LIVE
     for answer in answers:
         db.add(
             AnswerRecord(

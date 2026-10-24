@@ -205,6 +205,36 @@ async def test_a_topic_at_or_above_80_percent_is_mastered_and_below_is_not(clien
     assert (bea_cell["accuracy"], bea_cell["mastered"]) == (60, False)
 
 
+async def test_answers_on_topics_differing_only_in_case_or_spacing_combine_into_one_topic(client):
+    import json
+
+    import app.database as database
+    from app.mastery import ANSWER_SOURCE_HOMEWORK
+    from app.models import AnswerRecord
+
+    room = await Classroom.create(client, "t_merge", [_question("Q1", ["Long division"])])
+    ada = await room.add_student("Ada", "ada01")
+    # Answers recorded under three spellings of one topic (as stored on each answer when it was given).
+    async with database.AsyncSessionLocal() as session:
+        for spelling, correct in [("Long division", True), ("long  division", True), (" LONG DIVISION ", False)]:
+            session.add(
+                AnswerRecord(
+                    student_id=ada["id"],
+                    class_id=room.class_id,
+                    topics_json=json.dumps([spelling]),
+                    correct=correct,
+                    source=ANSWER_SOURCE_HOMEWORK,
+                )
+            )
+        await session.commit()
+
+    report = await room.mastery_report()
+    assert len(report["topics"]) == 1
+    assert report["topics"][0].casefold().split() == ["long", "division"]
+    cell = _cell(report, ada["id"], report["topics"][0])
+    assert (cell["answer_count"], cell["accuracy"]) == (3, pytest.approx(66.7))
+
+
 async def test_answers_on_questions_without_topics_are_left_out_of_the_table_and_counted(client):
     room = await Classroom.create(
         client, "t_no_topics", [_question("Q1", ["Fractions"]), _question("Q2"), _question("Q3")]
