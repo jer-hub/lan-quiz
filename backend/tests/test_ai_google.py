@@ -42,7 +42,8 @@ class RecordingProvider:
 
     sent: list[dict] = []
     client_kwargs: list[dict] = []
-    reply = None  # callable(url) -> httpx.Response, or an exception to raise
+    # callable(url) -> httpx.Response, an exception to raise, or a list of those used one per call
+    reply = None
 
     def __init__(self, *args, **kwargs):
         RecordingProvider.client_kwargs.append(kwargs)
@@ -55,9 +56,12 @@ class RecordingProvider:
 
     async def post(self, url, headers=None, json=None, extensions=None):
         RecordingProvider.sent.append({"url": url, "headers": headers or {}, "body": json or {}})
-        if isinstance(RecordingProvider.reply, Exception):
-            raise RecordingProvider.reply
-        return RecordingProvider.reply(url)
+        reply = RecordingProvider.reply
+        if isinstance(reply, list):
+            reply = reply.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply(url)
 
 
 @pytest.fixture
@@ -128,20 +132,72 @@ async def test_base_url_in_request_cannot_redirect_the_call(recorder):
     assert recorder.sent[0]["url"] == f"{GEMINI_BASE}/chat/completions"
 
 
-async def test_client_waits_long_enough_for_thinking_models(recorder):
+async def test_each_attempt_is_limited_to_45_seconds(recorder):
     await _post(_payload())
     timeout = recorder.client_kwargs[0]["timeout"]
     assert isinstance(timeout, httpx.Timeout)
-    assert timeout.read >= 120
+    assert timeout.read == 45
     assert timeout.connect <= 15
 
 
 async def test_timeout_is_logged_with_elapsed_time(recorder, caplog):
     recorder.reply = httpx.ReadTimeout("slow")
     with caplog.at_level(logging.WARNING, logger="app.routers.ai"):
-        resp = await _post(_payload())
-    assert resp.status_code == 504
+        await _post(_payload())
     assert any("timed out" in r.getMessage() and "after=" in r.getMessage() for r in caplog.records)
+
+
+FALLBACK_MODEL = "gemini-3.5-flash-lite"
+
+
+def _busy(url):
+    body = [{"error": {"code": 503, "message": "This model is currently experiencing high demand.", "status": "UNAVAILABLE"}}]
+    return httpx.Response(503, json=body, request=httpx.Request("POST", url))
+
+
+async def test_first_attempt_success_reports_the_chosen_model(recorder):
+    resp = await _post(_payload())
+    assert resp.status_code == 200
+    assert len(recorder.sent) == 1
+    assert resp.json()["model_used"] == GEMINI_DEFAULT_MODEL
+    assert resp.json()["fallback_used"] is False
+
+
+@pytest.mark.parametrize("first_failure", [_busy, httpx.ReadTimeout("slow")], ids=["busy", "timeout"])
+async def test_busy_or_slow_model_falls_back_once_to_flash_lite(recorder, first_failure):
+    recorder.reply = [first_failure, _ok]
+    resp = await _post(_payload())
+    assert resp.status_code == 200, resp.text
+    assert [s["body"]["model"] for s in recorder.sent] == [GEMINI_DEFAULT_MODEL, FALLBACK_MODEL]
+    assert resp.json()["model_used"] == FALLBACK_MODEL
+    assert resp.json()["fallback_used"] is True
+
+
+@pytest.mark.parametrize(
+    "failures",
+    [[_busy, _busy], [httpx.ReadTimeout("slow"), _busy], [_busy, httpx.ReadTimeout("slow")]],
+    ids=["busy-busy", "timeout-busy", "busy-timeout"],
+)
+async def test_both_attempts_busy_or_slow_gives_a_clear_busy_message(recorder, failures):
+    recorder.reply = failures
+    resp = await _post(_payload())
+    assert resp.status_code == 503
+    assert "busy" in resp.json()["detail"].lower()
+    assert len(recorder.sent) == 2
+
+
+async def test_flash_lite_is_not_retried_with_itself(recorder):
+    recorder.reply = [_busy, _ok]
+    resp = await _post(_payload(model=FALLBACK_MODEL))
+    assert resp.status_code == 503
+    assert len(recorder.sent) == 1
+
+
+@pytest.mark.parametrize("code", [400, 401, 403, 404, 429])
+async def test_other_errors_are_not_retried(recorder, code):
+    recorder.reply = [lambda url: httpx.Response(code, json={}, request=httpx.Request("POST", url)), _ok]
+    await _post(_payload())
+    assert len(recorder.sent) == 1
 
 
 async def test_provider_reason_logged_without_key_and_not_shown_to_teacher(recorder, caplog):

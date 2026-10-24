@@ -38,9 +38,12 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
-# Gemini 3 models always think before answering, so a full quiz can take well over a
-# minute. Connecting should still fail fast.
-PROVIDER_TIMEOUT = httpx.Timeout(150.0, connect=10.0)
+# A healthy quiz generation takes about 4-18 s. A model under heavy demand can answer 503
+# or hold the request without replying, so each attempt is capped and a busy or slow
+# model falls back once to Flash-Lite.
+PROVIDER_TIMEOUT = httpx.Timeout(45.0, connect=10.0)
+FALLBACK_MODEL = "gemini-3.5-flash-lite"
+BUSY_MESSAGE = "Gemini is busy right now (high demand). Please try again in a minute."
 
 RATE_WARN_THRESHOLD = 5
 
@@ -79,6 +82,8 @@ class RateLimitInfo(BaseModel):
 class AiGenerateResponse(BaseModel):
     quiz: QuizCreate
     rate_limit: RateLimitInfo
+    model_used: str
+    fallback_used: bool = False
 
 
 class AiExtractResponse(BaseModel):
@@ -391,24 +396,45 @@ async def generate_quiz(
         "Content-Type": "application/json",
     }
 
+    # The chosen model first; if it is busy (503) or does not answer in time, Flash-Lite once.
+    attempts = [model] if model == FALLBACK_MODEL else [model, FALLBACK_MODEL]
+    resp: httpx.Response | None = None
+    model_used = model
     started = time.monotonic()
-    try:
-        async with httpx.AsyncClient(timeout=PROVIDER_TIMEOUT) as client:
-            resp = await client.post(url, headers=headers, json=body)
-    except httpx.TimeoutException as exc:
-        logger.warning(
-            "AI provider timed out model=%s after=%.1fs (%s)",
-            model,
-            time.monotonic() - started,
-            type(exc).__name__,
-        )
-        raise HTTPException(status_code=504, detail="AI provider timed out") from exc
-    except httpx.RequestError as exc:
-        logger.warning("AI provider request failed model=%s: %s", model, type(exc).__name__)
-        raise HTTPException(
-            status_code=502,
-            detail="Could not reach AI provider. Check internet access on the LanQuiz host.",
-        ) from exc
+    for attempt_model in attempts:
+        attempt_body = {**body, "model": attempt_model}
+        model_used = attempt_model
+        started = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=PROVIDER_TIMEOUT) as client:
+                resp = await client.post(url, headers=headers, json=attempt_body)
+        except httpx.TimeoutException as exc:
+            logger.warning(
+                "AI provider timed out model=%s after=%.1fs (%s)",
+                attempt_model,
+                time.monotonic() - started,
+                type(exc).__name__,
+            )
+            resp = None
+            continue
+        except httpx.RequestError as exc:
+            logger.warning("AI provider request failed model=%s: %s", attempt_model, type(exc).__name__)
+            raise HTTPException(
+                status_code=502,
+                detail="Could not reach AI provider. Check internet access on the LanQuiz host.",
+            ) from exc
+        if resp.status_code == 503:
+            logger.warning(
+                "AI provider busy status=503 model=%s after=%.1fs reason=%s",
+                attempt_model,
+                time.monotonic() - started,
+                _provider_reason(resp, api_key),
+            )
+            resp = None
+            continue
+        break
+    if resp is None:
+        raise HTTPException(status_code=503, detail=BUSY_MESSAGE)
     elapsed = time.monotonic() - started
 
     rate = _parse_rate_limit(resp.headers)
@@ -425,7 +451,7 @@ async def generate_quiz(
         logger.warning(
             "AI provider returned status=%s model=%s after=%.1fs reason=%s",
             resp.status_code,
-            model,
+            model_used,
             elapsed,
             _provider_reason(resp, api_key),
         )
@@ -451,10 +477,16 @@ async def generate_quiz(
 
     api_key = ""
     logger.info(
-        "AI quiz generated model=%s questions=%s after=%.1fs warning=%s",
-        model,
+        "AI quiz generated model=%s fallback=%s questions=%s after=%.1fs warning=%s",
+        model_used,
+        model_used != model,
         len(quiz.questions),
         elapsed,
         rate.warning,
     )
-    return AiGenerateResponse(quiz=quiz, rate_limit=rate)
+    return AiGenerateResponse(
+        quiz=quiz,
+        rate_limit=rate,
+        model_used=model_used,
+        fallback_used=model_used != model,
+    )

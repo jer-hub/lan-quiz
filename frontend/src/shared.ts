@@ -379,6 +379,10 @@ export interface AiGenerateResult {
     questions: Question[];
   };
   rate_limit: AiRateLimit;
+  /** The Gemini model that actually wrote the quiz. */
+  model_used: string;
+  /** True when the chosen model was busy or slow and Flash-Lite was used instead. */
+  fallback_used: boolean;
 }
 
 export const OPTION_COLORS = [

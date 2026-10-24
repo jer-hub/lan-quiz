@@ -41,7 +41,8 @@ Get a key: https://aistudio.google.com/apikey
 ## How requests are sent
 
 - Gemini 3 models always think before answering, and thinking counts against the output limit. LanQuiz asks for low reasoning effort and allows up to 8,192 output tokens. JSON mode is not requested; the quiz JSON is read from the reply.
-- A generation may take over a minute. LanQuiz waits up to 150 seconds for the reply (10 seconds to connect).
+- A generation normally takes about 4–18 seconds. Each attempt is capped at 45 seconds (10 seconds to connect).
+- If the chosen model is busy (Google answers 503 "high demand") or does not answer within 45 seconds, LanQuiz retries once with `gemini-3.5-flash-lite` and tells the teacher which model wrote the draft. Other errors are not retried.
 - Free tiers enforce request and token limits; large materials may need trimming. HTTP 429 returns a clear message.
 
 ## Troubleshooting
@@ -50,7 +51,8 @@ The server log records every attempt with the model and how long it took, and fo
 
 | You see | Likely cause |
 |---------|--------------|
-| AI provider timed out | Google took longer than 150 s. Try `gemini-3.5-flash-lite`, fewer questions, or shorter source material. |
+| Gemini is busy right now | Both the chosen model and Flash-Lite were busy or slow. Google's demand spikes are usually short; try again in a minute. |
+| "…was busy, so this draft was written by Gemini 3.5 Flash-Lite" | Not an error: the chosen model was busy, and the fallback worked. |
 | Google AI Studio rejected the API key | Wrong or revoked key, or the Gemini API is not enabled for the key's project. |
 | Google AI Studio does not recognise this model | The model ID is not available to your key. Pick another model. |
 | Rejected the request (HTTP 400) | Usually an invalid key or model; the server log has Google's exact reason. |

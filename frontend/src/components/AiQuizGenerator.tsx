@@ -46,6 +46,7 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rateLimit, setRateLimit] = useState<AiRateLimit | null>(null);
+  const [modelNote, setModelNote] = useState<{ text: string; fallback: boolean } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -108,6 +109,7 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
   const generate = async () => {
     setError(null);
     setRateLimit(null);
+    setModelNote(null);
     const topicTrim = topic.trim();
     const materialTrim = sourceMaterial.trim();
     if (topicTrim.length < 3 && materialTrim.length < 20) {
@@ -132,6 +134,15 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
         language,
       });
       setRateLimit(result.rate_limit);
+      const label = (id: string) => modelOptions.find((m) => m.id === id)?.label.replace(" (default)", "") || id;
+      setModelNote(
+        result.fallback_used
+          ? {
+              text: `${label(model.trim())} was busy, so this draft was written by ${label(result.model_used)}.`,
+              fallback: true,
+            }
+          : { text: `Draft written by ${label(result.model_used)}.`, fallback: false },
+      );
       onGenerated({
         title: result.quiz.title,
         description: result.quiz.description,
@@ -176,6 +187,18 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
           {error && (
             <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">
               {error}
+            </div>
+          )}
+          {modelNote && (
+            <div
+              className={`rounded-xl border px-3 py-2 text-sm ${
+                modelNote.fallback
+                  ? "border-amber-300 bg-amber-100 text-amber-950"
+                  : "border-sky-200 bg-sky-50 text-ink/80"
+              }`}
+              role="status"
+            >
+              {modelNote.text}
             </div>
           )}
           {rateLimit?.warning && (
