@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
+import MasteryReport from "../components/MasteryReport";
 import { STUDENT_PASSWORD_MIN } from "../shared";
 import type { ClassOut, Gradebook, StudentCreated, StudentOut } from "../shared";
 
@@ -12,6 +13,7 @@ export default function ClassDetailPage() {
   const [classroom, setClassroom] = useState<ClassOut | null>(null);
   const [students, setStudents] = useState<StudentOut[]>([]);
   const [gradebook, setGradebook] = useState<Gradebook | null>(null);
+  const [tab, setTab] = useState<"class" | "mastery">("class");
   const [displayName, setDisplayName] = useState("");
   const [studentCode, setStudentCode] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -128,164 +130,194 @@ export default function ClassDetailPage() {
       </label>
       {error && <p className="mt-3 text-danger">{error}</p>}
 
-      <section className="mt-8">
-        <h2 className="font-display text-2xl">Roster</h2>
-        <form onSubmit={(e) => void addStudent(e)} className="mt-3 flex flex-wrap gap-2">
-          <input
-            className="rounded-xl border border-sky-200 px-3 py-2"
-            placeholder="Display name"
-            value={displayName}
-            onChange={(e) => setDisplayName(e.target.value)}
-            required
-          />
-          <input
-            className="rounded-xl border border-sky-200 px-3 py-2 uppercase"
-            placeholder="Student code"
-            value={studentCode}
-            onChange={(e) => setStudentCode(e.target.value.toUpperCase())}
-            required
-          />
-          <button type="submit" className="rounded-xl bg-brand px-4 py-2 font-bold text-white">
-            Add
-          </button>
+      <div role="tablist" className="mt-8 flex gap-2 border-b border-sky-200">
+        {(
+          [
+            ["class", "Roster & gradebook"],
+            ["mastery", "Mastery"],
+          ] as const
+        ).map(([key, label]) => (
           <button
+            key={key}
             type="button"
-            className="rounded-xl border border-sky-300 bg-white px-4 py-2 font-bold"
-            onClick={() => fileRef.current?.click()}
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => setTab(key)}
+            className={`-mb-px border-b-2 px-4 py-2 font-bold ${
+              tab === key ? "border-brand text-brand-dark" : "border-transparent text-ink/60"
+            }`}
           >
-            Import CSV
+            {label}
           </button>
-          <button
-            type="button"
-            className="rounded-xl border border-sky-300 bg-white px-4 py-2 font-bold"
-            onClick={downloadTemplate}
-          >
-            Template
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".csv,text/csv"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void onImport(f);
-              e.target.value = "";
-            }}
-          />
-        </form>
-        <p className="mt-2 text-xs text-ink/50">
-          CSV headers in order: username,password,first_name,last_name,email,school_id,class_section
-          — code = username, name = first + last, blank password gets a generated one (shown once),
-          supplied passwords need {STUDENT_PASSWORD_MIN}+ characters
-        </p>
-        {newPasswords.length > 0 && (
-          <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
-            <p className="font-bold">Generated passwords — shown once</p>
-            <p className="text-ink/70">
-              Hand these out now. They will not be shown again after you leave this page or import
-              another file.
-            </p>
-            <ul className="mt-2 space-y-1">
-              {newPasswords.map((s) => (
-                <li key={s.id} className="flex flex-wrap gap-x-3">
-                  <span className="font-bold">{s.display_name}</span>
-                  <span className="font-mono text-ink/60">{s.student_code}</span>
-                  <span className="font-mono font-bold">{s.generated_password}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {importReport && (
-          <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm">
-            <p className="font-bold">
-              Imported {importReport.added} student{importReport.added === 1 ? "" : "s"}
-              {importReport.skipped.length > 0 && ` · ${importReport.skipped.length} skipped`}
-            </p>
-            {importReport.skipped.length > 0 && (
-              <ul className="mt-2 space-y-1">
-                {importReport.skipped.slice(0, 10).map((s, i) => (
-                  <li key={i} className="text-ink/70">
-                    Row {s.row}: {s.reason}
-                  </li>
-                ))}
-                {importReport.skipped.length > 10 && (
-                  <li className="text-ink/50">…and {importReport.skipped.length - 10} more</li>
-                )}
-              </ul>
-            )}
-          </div>
-        )}
-        <ul className="mt-4 divide-y divide-sky-100 rounded-2xl border border-sky-200 bg-white">
-          {students.map((s) => (
-            <li key={s.id} className="flex items-center justify-between px-4 py-3">
-              <span>
-                <span className="font-bold">{s.display_name}</span>{" "}
-                <span className="font-mono text-sm text-ink/60">{s.student_code}</span>
-              </span>
+        ))}
+      </div>
+
+      {tab === "mastery" ? (
+        <section className="mt-6">
+          <MasteryReport classId={classId} />
+        </section>
+      ) : (
+        <>
+          <section className="mt-8">
+            <h2 className="font-display text-2xl">Roster</h2>
+            <form onSubmit={(e) => void addStudent(e)} className="mt-3 flex flex-wrap gap-2">
+              <input
+                className="rounded-xl border border-sky-200 px-3 py-2"
+                placeholder="Display name"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                required
+              />
+              <input
+                className="rounded-xl border border-sky-200 px-3 py-2 uppercase"
+                placeholder="Student code"
+                value={studentCode}
+                onChange={(e) => setStudentCode(e.target.value.toUpperCase())}
+                required
+              />
+              <button type="submit" className="rounded-xl bg-brand px-4 py-2 font-bold text-white">
+                Add
+              </button>
               <button
                 type="button"
-                className="text-sm font-bold text-danger"
-                onClick={() => void removeStudent(s.id)}
+                className="rounded-xl border border-sky-300 bg-white px-4 py-2 font-bold"
+                onClick={() => fileRef.current?.click()}
               >
-                Remove
+                Import CSV
               </button>
-            </li>
-          ))}
-          {!students.length && (
-            <li className="px-4 py-8 text-center text-ink/50">No students yet</li>
-          )}
-        </ul>
-      </section>
-
-      <section className="mt-10">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-display text-2xl">Gradebook</h2>
-          <button
-            type="button"
-            onClick={() => void exportCsv()}
-            className="rounded-xl bg-accent px-4 py-2 font-extrabold text-ink"
-          >
-            Export CSV
-          </button>
-        </div>
-        {gradebook && gradebook.assignments.length > 0 ? (
-          <div className="overflow-x-auto rounded-2xl border border-sky-200 bg-white">
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-sky-50">
-                <tr>
-                  <th className="px-3 py-2 font-bold">Student</th>
-                  {gradebook.assignments.map((a) => (
-                    <th key={a.id} className="px-3 py-2 font-bold">
-                      {a.title}
-                    </th>
+              <button
+                type="button"
+                className="rounded-xl border border-sky-300 bg-white px-4 py-2 font-bold"
+                onClick={downloadTemplate}
+              >
+                Template
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void onImport(f);
+                  e.target.value = "";
+                }}
+              />
+            </form>
+            <p className="mt-2 text-xs text-ink/50">
+              CSV headers in order: username,password,first_name,last_name,email,school_id,class_section
+              — code = username, name = first + last, blank password gets a generated one (shown once),
+              supplied passwords need {STUDENT_PASSWORD_MIN}+ characters
+            </p>
+            {newPasswords.length > 0 && (
+              <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm">
+                <p className="font-bold">Generated passwords — shown once</p>
+                <p className="text-ink/70">
+                  Hand these out now. They will not be shown again after you leave this page or import
+                  another file.
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {newPasswords.map((s) => (
+                    <li key={s.id} className="flex flex-wrap gap-x-3">
+                      <span className="font-bold">{s.display_name}</span>
+                      <span className="font-mono text-ink/60">{s.student_code}</span>
+                      <span className="font-mono font-bold">{s.generated_password}</span>
+                    </li>
                   ))}
-                  <th className="px-3 py-2 font-bold">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {gradebook.rows.map((row) => (
-                  <tr key={row.student_id} className="border-t border-sky-100">
-                    <td className="px-3 py-2 font-semibold">
-                      {row.display_name}{" "}
-                      <span className="font-mono text-xs text-ink/50">{row.student_code}</span>
-                    </td>
-                    {row.scores.map((cell) => (
-                      <td key={cell.assignment_id} className="px-3 py-2">
-                        {cell.score == null ? "—" : cell.score}
-                      </td>
+                </ul>
+              </div>
+            )}
+            {importReport && (
+              <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm">
+                <p className="font-bold">
+                  Imported {importReport.added} student{importReport.added === 1 ? "" : "s"}
+                  {importReport.skipped.length > 0 && ` · ${importReport.skipped.length} skipped`}
+                </p>
+                {importReport.skipped.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {importReport.skipped.slice(0, 10).map((s, i) => (
+                      <li key={i} className="text-ink/70">
+                        Row {s.row}: {s.reason}
+                      </li>
                     ))}
-                    <td className="px-3 py-2 font-bold">{row.total}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="text-ink/50">No assignment scores yet. Create an assignment and host a game.</p>
-        )}
-      </section>
+                    {importReport.skipped.length > 10 && (
+                      <li className="text-ink/50">…and {importReport.skipped.length - 10} more</li>
+                    )}
+                  </ul>
+                )}
+              </div>
+            )}
+            <ul className="mt-4 divide-y divide-sky-100 rounded-2xl border border-sky-200 bg-white">
+              {students.map((s) => (
+                <li key={s.id} className="flex items-center justify-between px-4 py-3">
+                  <span>
+                    <span className="font-bold">{s.display_name}</span>{" "}
+                    <span className="font-mono text-sm text-ink/60">{s.student_code}</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="text-sm font-bold text-danger"
+                    onClick={() => void removeStudent(s.id)}
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+              {!students.length && (
+                <li className="px-4 py-8 text-center text-ink/50">No students yet</li>
+              )}
+            </ul>
+          </section>
+    
+          <section className="mt-10">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="font-display text-2xl">Gradebook</h2>
+              <button
+                type="button"
+                onClick={() => void exportCsv()}
+                className="rounded-xl bg-accent px-4 py-2 font-extrabold text-ink"
+              >
+                Export CSV
+              </button>
+            </div>
+            {gradebook && gradebook.assignments.length > 0 ? (
+              <div className="overflow-x-auto rounded-2xl border border-sky-200 bg-white">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-sky-50">
+                    <tr>
+                      <th className="px-3 py-2 font-bold">Student</th>
+                      {gradebook.assignments.map((a) => (
+                        <th key={a.id} className="px-3 py-2 font-bold">
+                          {a.title}
+                        </th>
+                      ))}
+                      <th className="px-3 py-2 font-bold">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {gradebook.rows.map((row) => (
+                      <tr key={row.student_id} className="border-t border-sky-100">
+                        <td className="px-3 py-2 font-semibold">
+                          {row.display_name}{" "}
+                          <span className="font-mono text-xs text-ink/50">{row.student_code}</span>
+                        </td>
+                        {row.scores.map((cell) => (
+                          <td key={cell.assignment_id} className="px-3 py-2">
+                            {cell.score == null ? "—" : cell.score}
+                          </td>
+                        ))}
+                        <td className="px-3 py-2 font-bold">{row.total}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-ink/50">No assignment scores yet. Create an assignment and host a game.</p>
+            )}
+          </section>
+        </>
+      )}
     </div>
   );
 }

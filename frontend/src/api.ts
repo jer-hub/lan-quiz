@@ -12,6 +12,7 @@ import type {
   GameHistory,
   GameInfo,
   Gradebook,
+  MasteryReport,
   MeResponse,
   PinPeek,
   QuestionAnalysis,
@@ -222,6 +223,7 @@ export const api = {
     }),
 
   getGradebook: (classId: number) => request<Gradebook>(`/api/gradebook/${classId}`),
+  getMasteryReport: (classId: number) => request<MasteryReport>(`/api/classes/${classId}/mastery`),
   exportGradebook: async (classId: number) => {
     const headers: Record<string, string> = {};
     if (authToken) headers.Authorization = `Bearer ${authToken}`;

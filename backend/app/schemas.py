@@ -362,3 +362,30 @@ class AttemptSubmitOut(BaseModel):
     total: int
     correct_count: int
     submitted_at: datetime | None = None
+
+
+class MasteryCell(BaseModel):
+    """One student's accuracy on one topic. accuracy is None when there are not enough answers."""
+
+    topic: str
+    answer_count: int
+    accuracy: float | None
+    mastered: bool
+
+
+class MasteryRow(BaseModel):
+    student_id: int
+    display_name: str
+    student_code: str
+    cells: list[MasteryCell]
+
+
+class MasteryReportOut(BaseModel):
+    class_id: int
+    class_name: str
+    mastery_threshold: int
+    window: int
+    min_answers: int
+    topics: list[str]
+    rows: list[MasteryRow]
+    untagged_answer_count: int

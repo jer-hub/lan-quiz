@@ -13,12 +13,14 @@ from sqlalchemy.orm import selectinload
 
 from app.auth import hash_password, require_teacher
 from app.database import get_db
+from app.mastery import build_mastery_report
 from app.models import ClassRoom, Student, User
 from app.roster import MAX_CSV_ROWS, ROSTER_HEADERS, STUDENT_PASSWORD_MIN, read_csv_rows
 from app.schemas import (
     ClassCreate,
     ClassOut,
     ClassUpdate,
+    MasteryReportOut,
     StudentCreate,
     StudentCreated,
     StudentOut,
@@ -146,6 +148,15 @@ async def update_class(
         classroom.require_password = payload.require_password
     await db.commit()
     return _class_out(await _load_class(db, class_id, teacher))
+
+
+@router.get("/{class_id}/mastery", response_model=MasteryReportOut)
+async def get_mastery_report(
+    class_id: int,
+    teacher: User = Depends(require_teacher),
+    db: AsyncSession = Depends(get_db),
+) -> MasteryReportOut:
+    return await build_mastery_report(db, await _load_class(db, class_id, teacher))
 
 
 @router.delete("/{class_id}", status_code=204)

@@ -245,6 +245,32 @@ export interface Gradebook {
   rows: GradebookRow[];
 }
 
+/** One student's accuracy on one topic. accuracy is null when there are not enough answers. */
+export interface MasteryCell {
+  topic: string;
+  answer_count: number;
+  accuracy: number | null;
+  mastered: boolean;
+}
+
+export interface MasteryRow {
+  student_id: number;
+  display_name: string;
+  student_code: string;
+  cells: MasteryCell[];
+}
+
+export interface MasteryReport {
+  class_id: number;
+  class_name: string;
+  mastery_threshold: number;
+  window: number;
+  min_answers: number;
+  topics: string[];
+  rows: MasteryRow[];
+  untagged_answer_count: number;
+}
+
 export interface QuestionAnalysis {
   question_index: number;
   question_id: number | null;

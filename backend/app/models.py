@@ -255,6 +255,34 @@ class Attempt(Base):
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class AnswerRecord(Base):
+    """One classroom student's answer to one question, kept as evidence for the mastery report.
+
+    Topics and correctness are recorded when the answer is given, never looked up later (ADR 0001).
+    Writing and reading these rows lives in app.mastery.
+    """
+
+    __tablename__ = "answer_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    student_id: Mapped[int] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    class_id: Mapped[int] = mapped_column(ForeignKey("classes.id", ondelete="CASCADE"), nullable=False, index=True)
+    # The question's topic names when it was answered, as a JSON list; [] for an untagged question.
+    topics_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)  # homework|live
+    # The homework attempt or game history the answer came from; evidence outlives either.
+    attempt_id: Mapped[int | None] = mapped_column(
+        ForeignKey("attempts.id", ondelete="SET NULL"), nullable=True
+    )
+    history_id: Mapped[int | None] = mapped_column(
+        ForeignKey("game_history.id", ondelete="SET NULL"), nullable=True
+    )
+    answered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class ActiveGame(Base):
     """Crash-safe snapshot of a live lobby (restored on startup)."""
 
