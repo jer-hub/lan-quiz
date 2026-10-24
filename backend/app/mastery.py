@@ -6,8 +6,6 @@ whether it was correct at that moment (ADR 0001). The report reads only those re
 
 from __future__ import annotations
 
-import csv
-import io
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -19,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import AnswerRecord, ClassRoom
 from app.schemas import MasteryCell, MasteryReportOut, MasteryRow
 from app.topics import topic_key
+from app.utils.csv_export import export_csv
 
 MASTERY_WINDOW = 10  # accuracy is over a student's most recent answers on a topic, at most this many
 MASTERY_MIN_ANSWERS = 3  # with fewer answers on a topic, the report says "not enough answers"
@@ -147,9 +146,9 @@ def _csv_cell(cell: MasteryCell) -> str:
 
 def mastery_report_csv(report: MasteryReportOut) -> str:
     """The mastery report as CSV: one row per student, one column per topic."""
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["student_code", "display_name", *report.topics])
-    for row in report.rows:
-        writer.writerow([row.student_code, row.display_name, *(_csv_cell(c) for c in row.cells)])
-    return buf.getvalue()
+    return export_csv(
+        [
+            ["student_code", "display_name", *report.topics],
+            *([row.student_code, row.display_name, *(_csv_cell(c) for c in row.cells)] for row in report.rows),
+        ]
+    )

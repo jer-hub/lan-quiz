@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import csv
-import io
 import logging
 from datetime import datetime, timezone
 
@@ -19,6 +17,7 @@ from app.config import settings
 from app.database import get_db
 from app.game_manager import calculate_score, game_manager, is_permutation, normalize_short_answer
 from app.mastery import GivenAnswer, record_answers
+from app.utils.csv_export import export_csv
 from app.models import (
     Assignment,
     Attempt,
@@ -861,21 +860,19 @@ async def export_gradebook_csv(
         raise HTTPException(status_code=404, detail="Class not found")
     book = await _build_gradebook(db, classroom)
 
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    header = ["student_code", "display_name"] + [a.title for a in book.assignments] + ["total"]
-    writer.writerow(header)
+    lines: list[list[object]] = [
+        ["student_code", "display_name"] + [a.title for a in book.assignments] + ["total"]
+    ]
     for row in book.rows:
-        line = [row.student_code, row.display_name]
+        line: list[object] = [row.student_code, row.display_name]
         for cell in row.scores:
             line.append("" if cell.score is None else cell.score)
         line.append(row.total)
-        writer.writerow(line)
+        lines.append(line)
 
-    buf.seek(0)
     filename = f"gradebook-class-{class_id}.csv"
     return StreamingResponse(
-        iter([buf.getvalue()]),
+        iter([export_csv(lines)]),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
