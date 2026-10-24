@@ -118,9 +118,9 @@ In both CSV exports (gradebook and mastery report), a text cell starting with `=
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/ai/presets` | Providers/models + extract limits |
+| GET | `/api/ai/presets` | Google AI Studio models + extract limits |
 | POST | `/api/ai/extract-text` | Multipart `file` → text (PDF/DOCX/TXT/MD, max 5 MB) |
-| POST | `/api/ai/generate-quiz` | JSON: provider, model, `api_key`, topic / `source_material`, … |
+| POST | `/api/ai/generate-quiz` | JSON: `model`, `api_key`, topic / `source_material`, … (provider is always `google`) |
 
 API keys are **not** stored server-side. See [AI.md](AI.md).
 

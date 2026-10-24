@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
-import ipaddress
 import json
 import logging
 import random
 import re
-import socket
+import time
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
 
 from app.auth import require_teacher
-from app.config import settings
 from app.models import User
 from app.schemas import QuestionCreate, QuizCreate
 from app.text_extract import MAX_EXTRACT_CHARS, MAX_UPLOAD_BYTES, extract_text
@@ -25,11 +21,13 @@ from app.text_extract import MAX_EXTRACT_CHARS, MAX_UPLOAD_BYTES, extract_text
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+
 PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     "google": {
         "id": "google",
         "label": "Google AI Studio (Gemini)",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "base_url": GEMINI_BASE_URL,
         "docs_url": "https://aistudio.google.com/apikey",
         "models": [
             {"id": "gemini-3.8-flash", "label": "Gemini 3.8 Flash (default)", "aliases": []},
@@ -38,58 +36,11 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         ],
         "default_model": "gemini-3.8-flash",
     },
-    "groq": {
-        "id": "groq",
-        "label": "Groq (free tier supported)",
-        "base_url": "https://api.groq.com/openai/v1",
-        "docs_url": "https://console.groq.com/keys",
-        "models": [
-            {
-                "id": "qwen/qwen3-32b",
-                "label": "Qwen3 32B (default)",
-                "aliases": ["qwen/qwen3.8-27b"],
-            },
-            {
-                "id": "openai/gpt-oss-120b",
-                "label": "GPT-OSS 120B",
-                "aliases": [],
-            },
-            {"id": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B", "aliases": []},
-            {"id": "llama-3.1-8b-instant", "label": "Llama 3.1 8B Instant", "aliases": []},
-        ],
-        "default_model": "qwen/qwen3-32b",
-    },
-    "openai": {
-        "id": "openai",
-        "label": "OpenAI",
-        "base_url": "https://api.openai.com/v1",
-        "docs_url": "https://platform.openai.com/api-keys",
-        "models": [
-            {"id": "gpt-4o-mini", "label": "GPT-4o mini", "aliases": []},
-            {"id": "gpt-4o", "label": "GPT-4o", "aliases": []},
-        ],
-        "default_model": "gpt-4o-mini",
-    },
-    "openrouter": {
-        "id": "openrouter",
-        "label": "OpenRouter",
-        "base_url": "https://openrouter.ai/api/v1",
-        "docs_url": "https://openrouter.ai/keys",
-        "models": [
-            {"id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "aliases": []},
-            {"id": "qwen/qwen3-32b", "label": "Qwen3 32B", "aliases": ["qwen/qwen3.8-27b"]},
-        ],
-        "default_model": "qwen/qwen3-32b",
-    },
-    "custom": {
-        "id": "custom",
-        "label": "Custom (OpenAI-compatible)",
-        "base_url": "",
-        "docs_url": "",
-        "models": [],
-        "default_model": "",
-    },
 }
+
+# Gemini 3 models always think before answering, so a full quiz can take well over a
+# minute. Connecting should still fail fast.
+PROVIDER_TIMEOUT = httpx.Timeout(150.0, connect=10.0)
 
 RATE_WARN_THRESHOLD = 5
 
@@ -101,7 +52,6 @@ class AiGenerateRequest(BaseModel):
     provider: str = Field(default=DEFAULT_PROVIDER)
     model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=200)
     api_key: str = Field(..., min_length=8, max_length=500)
-    base_url: str | None = Field(default=None, max_length=500)
     topic: str = Field(default="", max_length=2000)
     source_material: str | None = Field(default=None, max_length=MAX_EXTRACT_CHARS)
     question_count: int = Field(default=8, ge=3, le=20)
@@ -137,82 +87,6 @@ class AiExtractResponse(BaseModel):
     truncated: bool
     warning: str
     filename: str
-
-
-def _resolve_base_url(provider: str, base_url: str | None) -> str:
-    key = provider.strip().lower()
-    if key == "custom":
-        url = (base_url or "").strip().rstrip("/")
-        if not url:
-            raise HTTPException(status_code=400, detail="Custom provider requires a base_url")
-        return url
-    preset = PROVIDER_PRESETS.get(key)
-    if not preset:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
-    return (base_url or preset["base_url"]).strip().rstrip("/")
-
-
-def _is_internal_address(raw: str) -> bool:
-    ip = ipaddress.ip_address(raw.split("%", 1)[0])
-    # Treat ::ffff:127.0.0.1 style addresses as the IPv4 address they wrap.
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_unspecified
-
-
-async def _check_provider_url(base_url: str) -> tuple[str, str]:
-    """Refuse non-https or internal targets, then pin the connection to a checked address.
-
-    The host is resolved once. Every returned address must be public. The returned
-    URL uses the first checked IP, so the connection cannot be rebound to another
-    address. The hostname is returned separately for TLS (SNI and certificate check)
-    and the Host header.
-    """
-    parts = urlsplit(base_url)
-    if parts.scheme.lower() != "https":
-        raise HTTPException(status_code=400, detail="AI provider URL must use https")
-    host = parts.hostname
-    if not host:
-        raise HTTPException(status_code=400, detail="AI provider URL must include a host")
-    if settings.allow_private_ai_providers:
-        return base_url, host
-    try:
-        infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise HTTPException(status_code=400, detail="Could not resolve AI provider host") from exc
-    addresses: list[str] = []
-    for info in infos:
-        address = info[4][0]
-        if _is_internal_address(address):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "AI provider URL must not point to a private or loopback address "
-                    "(set ALLOW_PRIVATE_AI_PROVIDERS=true to allow a local model)"
-                ),
-            )
-        addresses.append(address)
-    if not addresses:
-        raise HTTPException(status_code=400, detail="Could not resolve AI provider host")
-    ip = addresses[0]
-    netloc = f"[{ip}]" if ":" in ip else ip
-    if parts.port is not None:
-        netloc += f":{parts.port}"
-    pinned = urlunsplit((parts.scheme, netloc, parts.path, parts.query, ""))
-    return pinned.rstrip("/"), host
-
-
-def _normalize_model(provider: str, model: str) -> str:
-    m = model.strip()
-    # Map planned alias to current Groq ID
-    if m == "qwen/qwen3.8-27b":
-        return "qwen/qwen3-32b"
-    preset = PROVIDER_PRESETS.get(provider.strip().lower())
-    if preset:
-        for item in preset.get("models") or []:
-            if m in (item.get("aliases") or []):
-                return item["id"]
-    return m
 
 
 def _build_prompt(
@@ -391,10 +265,35 @@ def _parse_rate_limit(headers: httpx.Headers) -> RateLimitInfo:
     )
 
 
+def _provider_reason(resp: httpx.Response, api_key: str) -> str:
+    """Short provider error message for the server log, with the API key removed."""
+    msg = None
+    try:
+        err = resp.json()
+        if isinstance(err, list) and err:
+            err = err[0]
+        if isinstance(err, dict):
+            msg = (err.get("error") or {}).get("message")
+    except Exception:
+        msg = None
+    text = str(msg or resp.text or "")[:300]
+    return text.replace(api_key, "[key]") if api_key else text
+
+
+def _provider_error_hint(status_code: int) -> str:
+    if status_code in (401, 403):
+        return "Google AI Studio rejected the API key. Check the key and that the Gemini API is enabled."
+    if status_code == 404:
+        return "Google AI Studio does not recognise this model. Pick another model."
+    if status_code == 400:
+        return "Google AI Studio rejected the request (HTTP 400). Check the API key and model."
+    return f"AI provider returned an error (HTTP {status_code})"
+
+
 @router.get("/presets")
 async def ai_presets(_teacher: User = Depends(require_teacher)) -> dict[str, Any]:
     return {
-        "label": "AI Quiz Generator (Free tier supported)",
+        "label": "AI Quiz Generator (Google AI Studio)",
         "default_provider": DEFAULT_PROVIDER,
         "default_model": DEFAULT_MODEL,
         "providers": list(PROVIDER_PRESETS.values()),
@@ -462,20 +361,16 @@ async def generate_quiz(
     _teacher: User = Depends(require_teacher),
 ) -> AiGenerateResponse:
     provider = payload.provider.strip().lower()
-    model = _normalize_model(provider, payload.model)
-    base_url = _resolve_base_url(provider, payload.base_url)
-    # Presets are fixed https hosts; check them only when the teacher overrides the URL.
-    # Pinned to the checked address; TLS and Host still use the hostname.
-    tls_host: str | None = None
-    if provider == "custom" or (payload.base_url or "").strip():
-        base_url, tls_host = await _check_provider_url(base_url)
+    if provider not in PROVIDER_PRESETS:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {payload.provider}")
+    model = payload.model.strip()
     api_key = payload.api_key.strip()
 
     material = payload.source_material
     if material and len(material) > MAX_EXTRACT_CHARS:
         material = material[:MAX_EXTRACT_CHARS]
 
-    url = f"{base_url}/chat/completions"
+    url = f"{GEMINI_BASE_URL}/chat/completions"
     body: dict[str, Any] = {
         "model": model,
         "messages": _build_prompt(
@@ -486,43 +381,35 @@ async def generate_quiz(
             material,
         ),
         "temperature": 0.4,
-        "max_tokens": 4096,
+        # Thinking counts against the output limit: keep it low and leave room so the
+        # quiz JSON is not cut off. json_object mode is not documented for this endpoint.
+        "reasoning_effort": "low",
+        "max_tokens": 8192,
     }
-    # Prefer JSON mode when providers support it
-    if provider in ("groq", "openai", "openrouter"):
-        body["response_format"] = {"type": "json_object"}
-    if provider == "google":
-        # Gemini 3 models always think, and thinking counts against the output limit:
-        # keep it low and leave room so the quiz JSON is not cut off.
-        body["reasoning_effort"] = "low"
-        body["max_tokens"] = 8192
-
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    if provider == "openrouter":
-        headers["HTTP-Referer"] = "https://lanquiz.local"
-        headers["X-Title"] = "LanQuiz"
-    extensions: dict[str, Any] = {}
-    if tls_host:
-        headers["Host"] = tls_host
-        extensions["sni_hostname"] = tls_host
 
+    started = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, headers=headers, json=body, extensions=extensions)
+        async with httpx.AsyncClient(timeout=PROVIDER_TIMEOUT) as client:
+            resp = await client.post(url, headers=headers, json=body)
     except httpx.TimeoutException as exc:
+        logger.warning(
+            "AI provider timed out model=%s after=%.1fs (%s)",
+            model,
+            time.monotonic() - started,
+            type(exc).__name__,
+        )
         raise HTTPException(status_code=504, detail="AI provider timed out") from exc
     except httpx.RequestError as exc:
-        logger.warning("AI provider request failed: %s", exc)
+        logger.warning("AI provider request failed model=%s: %s", model, type(exc).__name__)
         raise HTTPException(
             status_code=502,
             detail="Could not reach AI provider. Check internet access on the LanQuiz host.",
         ) from exc
-    finally:
-        # Ensure key is not kept beyond this request path
-        api_key = ""
+    elapsed = time.monotonic() - started
 
     rate = _parse_rate_limit(resp.headers)
 
@@ -534,12 +421,15 @@ async def generate_quiz(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail)
 
     if resp.status_code >= 400:
-        # Provider bodies are not echoed: they can carry key fragments or internal details.
-        logger.warning("AI provider returned status=%s", resp.status_code)
-        raise HTTPException(
-            status_code=502,
-            detail=f"AI provider returned an error (HTTP {resp.status_code})",
+        # The provider's own message goes to the server log only, with the key removed.
+        logger.warning(
+            "AI provider returned status=%s model=%s after=%.1fs reason=%s",
+            resp.status_code,
+            model,
+            elapsed,
+            _provider_reason(resp, api_key),
         )
+        raise HTTPException(status_code=502, detail=_provider_error_hint(resp.status_code))
 
     try:
         data = resp.json()
@@ -559,11 +449,12 @@ async def generate_quiz(
             questions=quiz.questions[: payload.question_count],
         )
 
+    api_key = ""
     logger.info(
-        "AI quiz generated provider=%s model=%s questions=%s warning=%s",
-        provider,
+        "AI quiz generated model=%s questions=%s after=%.1fs warning=%s",
         model,
         len(quiz.questions),
+        elapsed,
         rate.warning,
     )
     return AiGenerateResponse(quiz=quiz, rate_limit=rate)

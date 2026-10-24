@@ -252,7 +252,6 @@ export const api = {
     provider: string;
     model: string;
     api_key: string;
-    base_url?: string | null;
     topic: string;
     source_material?: string | null;
     question_count: number;

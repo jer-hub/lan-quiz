@@ -11,7 +11,7 @@
 └─────────────┘                            └──────────────────────────┘
          │                                              │
          │  optional (AI generate only)                 │
-         └──────────────► Gemini / Groq / … ◄───────────┘
+         └──────────────► Google Gemini API ◄───────────┘
 ```
 
 - **One container** serves API, WebSocket, and built frontend.

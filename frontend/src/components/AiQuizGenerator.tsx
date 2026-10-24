@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { AiPresets, AiRateLimit, Question } from "../shared";
 
-const LS_PROVIDER = "lanquiz_ai_provider";
+const PROVIDER = "google";
 const LS_MODEL = "lanquiz_ai_model";
 const LS_KEY = "lanquiz_ai_key";
-const LS_BASE = "lanquiz_ai_base_url";
 const LS_REMEMBER = "lanquiz_ai_remember";
+// Saved by older versions that offered several providers.
+const LEGACY_KEYS = ["lanquiz_ai_provider", "lanquiz_ai_base_url"];
 
 export interface GeneratedQuizPatch {
   title: string;
@@ -25,14 +26,10 @@ function loadRemember(): boolean {
 export default function AiQuizGenerator({ onGenerated }: Props) {
   const [open, setOpen] = useState(false);
   const [presets, setPresets] = useState<AiPresets | null>(null);
-  const [provider, setProvider] = useState(
-    () => localStorage.getItem(LS_PROVIDER) || "google",
-  );
   const [model, setModel] = useState(
     () => localStorage.getItem(LS_MODEL) || "gemini-3.8-flash",
   );
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(LS_KEY) || "");
-  const [baseUrl, setBaseUrl] = useState(() => localStorage.getItem(LS_BASE) || "");
   const [remember, setRemember] = useState(loadRemember);
   const [topic, setTopic] = useState("");
   const [sourceMaterial, setSourceMaterial] = useState("");
@@ -60,8 +57,8 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
   }, [open, presets]);
 
   const providerMeta = useMemo(
-    () => presets?.providers.find((p) => p.id === provider) || null,
-    [presets, provider],
+    () => presets?.providers.find((p) => p.id === PROVIDER) || null,
+    [presets],
   );
 
   const modelOptions = providerMeta?.models || [];
@@ -69,19 +66,16 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
 
   useEffect(() => {
     if (!providerMeta) return;
-    if (provider === "custom") return;
     const ids = new Set(modelOptions.map((m) => m.id));
     if (!ids.has(model) && providerMeta.default_model) {
       setModel(providerMeta.default_model);
     }
-  }, [provider, providerMeta, model, modelOptions]);
+  }, [providerMeta, model, modelOptions]);
 
   const persistPrefs = () => {
     localStorage.setItem(LS_REMEMBER, remember ? "1" : "0");
-    localStorage.setItem(LS_PROVIDER, provider);
     localStorage.setItem(LS_MODEL, model);
-    if (baseUrl) localStorage.setItem(LS_BASE, baseUrl);
-    else localStorage.removeItem(LS_BASE);
+    LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
     if (remember && apiKey) localStorage.setItem(LS_KEY, apiKey);
     else localStorage.removeItem(LS_KEY);
   };
@@ -124,18 +118,13 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
       setError("Paste your API key (get a Gemini key from Google AI Studio)");
       return;
     }
-    if (provider === "custom" && !baseUrl.trim()) {
-      setError("Custom provider needs a base URL (…/v1)");
-      return;
-    }
     setBusy(true);
     persistPrefs();
     try {
       const result = await api.generateQuiz({
-        provider,
+        provider: PROVIDER,
         model: model.trim(),
         api_key: apiKey.trim(),
-        base_url: provider === "custom" ? baseUrl.trim() : baseUrl.trim() || null,
         topic: topicTrim,
         source_material: materialTrim || null,
         question_count: questionCount,
@@ -170,7 +159,7 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
         aria-expanded={open}
       >
         <div>
-          <p className="font-display text-xl text-ink">AI Quiz Generator (Free tier supported)</p>
+          <p className="font-display text-xl text-ink">AI Quiz Generator (Google AI Studio)</p>
           <p className="text-sm text-ink/65">
             Optional cloud tool — paste your own key. Live games work offline without AI.
           </p>
@@ -296,22 +285,12 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
-            <label className="text-sm font-bold">
+            <div className="text-sm font-bold">
               Provider
-              <select
-                className="mt-1 w-full rounded-xl border border-sky-200 bg-white px-3 py-2 font-normal"
-                value={provider}
-                onChange={(e) => setProvider(e.target.value)}
-              >
-                {(presets?.providers || [{ id: "google", label: "Google AI Studio (Gemini)" }]).map(
-                  (p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label}
-                    </option>
-                  ),
-                )}
-              </select>
-            </label>
+              <p className="mt-1 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 font-normal">
+                Google AI Studio (Gemini)
+              </p>
+            </div>
             <label className="text-sm font-bold">
               Model
               {modelOptions.length > 0 && (
@@ -335,18 +314,6 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
               />
             </label>
           </div>
-
-          {(provider === "custom" || providerMeta) && (
-            <label className="block text-sm font-bold">
-              {provider === "custom" ? "Base URL (required)" : "Base URL override (optional)"}
-              <input
-                className="mt-1 w-full rounded-xl border border-sky-200 bg-white px-3 py-2 font-mono text-sm font-normal"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder={providerMeta?.base_url || "https://api.example.com/v1"}
-              />
-            </label>
-          )}
 
           <label className="block text-sm font-bold">
             API key
@@ -376,7 +343,7 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
                 rel="noreferrer"
                 className="text-sm font-bold text-brand-dark underline"
               >
-                Get a free-tier key
+                Get a Google AI Studio key
               </a>
             )}
           </div>
@@ -390,8 +357,8 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
             {extracting ? "Extracting…" : busy ? "Generating…" : "Generate quiz draft"}
           </button>
           <p className="text-xs text-ink/50">
-            Review and edit questions below, then Save. Default: Google AI Studio with
-            gemini-3.8-flash. Groq, OpenAI and OpenRouter are still available.
+            Review and edit questions below, then Save. Default model: gemini-3.8-flash. A full
+            quiz can take over a minute while Gemini thinks.
           </p>
         </div>
       )}
