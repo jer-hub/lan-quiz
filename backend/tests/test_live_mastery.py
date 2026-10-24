@@ -227,6 +227,27 @@ async def test_a_live_answer_counts_as_given_when_its_question_ended_not_when_th
     assert (fractions["answer_count"], fractions["accuracy"]) == (10, 100)
 
 
+async def test_ending_the_game_while_a_question_is_open_keeps_that_questions_answers(client):
+    room = await Classroom.create(client, "t_live_end", [_question("Q1", ["Fractions"]), _question("Q2", ["Fractions"])])
+    ada = await room.add_student("Ada", "ADA01")
+    await room.add_student("Bea", "BEA01")
+    game = await LiveGame.host(room)
+    await game.join("ADA", code="ADA01")
+    await game.join("BEA", code="BEA01")
+    await game.start()
+    await game.answer("ADA", True)  # Bea has not answered, so question 1 stays open
+
+    await game.handlers["end_game"](HOST, {})
+    assert game_manager.get_by_pin(game.pin) is None
+
+    fractions = _cell(await room.mastery_report(), ada["id"], "Fractions")
+    assert (fractions["answer_count"], fractions["mastered"]) == (1, False)
+    res = await client.get(f"/api/assignments/{room.assignment_id}/analysis", headers=room.teacher)
+    assert res.status_code == 200, res.text
+    [question_1] = res.json()["analysis"]
+    assert (question_1["question_index"], question_1["total"], question_1["correct"]) == (0, 2, 1)
+
+
 async def test_a_live_answer_records_the_topics_the_question_had_when_the_game_was_hosted(client):
     room = await Classroom.create(client, "t_retag_live", [_question(f"Q{i}", ["Fractions"]) for i in range(1, 4)])
     ada = await room.add_student("Ada", "ADA01")

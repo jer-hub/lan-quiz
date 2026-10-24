@@ -543,6 +543,10 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
 
     @sio.event
     async def end_game(sid: str, data: dict | None = None) -> None:
+        open_game = game_manager.get_by_sid(sid)
+        if open_game and open_game.host_sid == sid and open_game.status == GameStatus.QUESTION:
+            # Close the open question first so its answers reach the game history and mastery.
+            await game_manager.end_question(open_game)
         try:
             session = await game_manager.end_game(sid)
         except ValueError as exc:
