@@ -32,6 +32,20 @@ export function getAuthToken() {
   return authToken;
 }
 
+const SESSION_EXPIRED = "Your session has expired. Please log in again.";
+let onSessionExpired: (() => void) | null = null;
+
+/** Called when the server rejects the session (e.g. it expired or the server's secret changed). */
+export function setSessionExpiredHandler(handler: (() => void) | null) {
+  onSessionExpired = handler;
+}
+
+function sessionRejected(res: Response, sentToken: boolean): boolean {
+  if (res.status !== 401 || !sentToken) return false;
+  onSessionExpired?.();
+  return true;
+}
+
 function formatErrorDetail(detail: unknown, fallback: string): string {
   if (typeof detail === "string") return detail;
   if (detail && typeof detail === "object") {
@@ -60,6 +74,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     headers.Authorization = `Bearer ${authToken}`;
   }
   const res = await fetch(url, { ...init, headers });
+  if (sessionRejected(res, Boolean(headers.Authorization))) throw new Error(SESSION_EXPIRED);
   if (!res.ok) {
     let detail: unknown = res.statusText;
     try {
@@ -83,6 +98,7 @@ async function downloadCsv(url: string): Promise<Blob> {
   const headers: Record<string, string> = {};
   if (authToken) headers.Authorization = `Bearer ${authToken}`;
   const res = await fetch(url, { headers });
+  if (sessionRejected(res, Boolean(headers.Authorization))) throw new Error(SESSION_EXPIRED);
   if (!res.ok) throw new Error("Export failed");
   return res.blob();
 }
