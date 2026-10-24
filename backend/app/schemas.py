@@ -169,11 +169,13 @@ class ClassCreate(BaseModel):
 class ClassUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     require_password: bool | None = None
+    # Whole-number percent, 1-100; strict so "80" or true are refused rather than coerced.
+    mastery_threshold: int | None = Field(default=None, ge=1, le=100, strict=True)
 
     @model_validator(mode="after")
     def _needs_a_field(self) -> ClassUpdate:
-        if self.name is None and self.require_password is None:
-            raise ValueError("Send name or require_password")
+        if self.name is None and self.require_password is None and self.mastery_threshold is None:
+            raise ValueError("Send name, require_password or mastery_threshold")
         return self
 
 
@@ -183,6 +185,7 @@ class ClassOut(BaseModel):
     join_code: str
     student_count: int
     require_password: bool
+    mastery_threshold: int
     created_at: datetime
 
 

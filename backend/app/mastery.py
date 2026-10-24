@@ -20,7 +20,6 @@ from app.topics import topic_key
 
 MASTERY_WINDOW = 10  # accuracy is over a student's most recent answers on a topic, at most this many
 MASTERY_MIN_ANSWERS = 3  # with fewer answers on a topic, the report says "not enough answers"
-DEFAULT_MASTERY_THRESHOLD = 80  # percent accuracy at which a topic counts as mastered
 
 
 @dataclass(frozen=True)
@@ -62,8 +61,8 @@ def record_answers(
 
 
 def mastery_threshold(classroom: ClassRoom) -> int:
-    """The class's mastery threshold, a whole-number percentage. Fixed for now; per-class setting is #16."""
-    return DEFAULT_MASTERY_THRESHOLD
+    """The class's mastery threshold: the whole-number percentage its teacher set (default 80)."""
+    return classroom.mastery_threshold
 
 
 def _cell(topic: str, given: list[bool], threshold: int) -> MasteryCell:

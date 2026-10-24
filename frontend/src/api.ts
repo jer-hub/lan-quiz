@@ -142,7 +142,10 @@ export const api = {
   createClass: (body: { name: string }) =>
     request<ClassOut>("/api/classes", { method: "POST", body: JSON.stringify(body) }),
   getClass: (id: number) => request<ClassOut>(`/api/classes/${id}`),
-  updateClass: (id: number, body: { name?: string; require_password?: boolean }) =>
+  updateClass: (
+    id: number,
+    body: { name?: string; require_password?: boolean; mastery_threshold?: number },
+  ) =>
     request<ClassOut>(`/api/classes/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteClass: (id: number) => request<void>(`/api/classes/${id}`, { method: "DELETE" }),
   listStudents: (classId: number) =>

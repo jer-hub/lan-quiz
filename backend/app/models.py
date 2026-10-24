@@ -9,6 +9,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
+DEFAULT_MASTERY_THRESHOLD = 80  # a class's mastery threshold until its teacher changes it, in percent
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -133,6 +135,10 @@ class ClassRoom(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     join_code: Mapped[str] = mapped_column(String(12), unique=True, nullable=False, index=True)
     require_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
+    # Percent accuracy (1-100) at which the mastery report marks a topic mastered.
+    mastery_threshold: Mapped[int] = mapped_column(
+        Integer, default=DEFAULT_MASTERY_THRESHOLD, server_default=str(DEFAULT_MASTERY_THRESHOLD), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     teacher: Mapped[User] = relationship("User", back_populates="classes")
