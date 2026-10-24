@@ -205,6 +205,28 @@ async def test_live_and_homework_answers_on_a_topic_combine_in_one_accuracy(clie
     assert (fractions["answer_count"], fractions["accuracy"]) == (4, 75)
 
 
+async def test_a_live_answer_counts_as_given_when_its_question_ended_not_when_the_game_ended(client):
+    room = await Classroom.create(client, "t_live_order", [_question("Q1", ["Fractions"]), _question("Q2", ["Fractions"])])
+    ada = await room.add_student("Ada", "ADA01")
+    game = await LiveGame.host(room)
+    await game.join("ADA", code="ADA01")
+    await game.start()
+    await game.answer("ADA", False)  # live question 1: wrong; the last answer closes it
+
+    # Between the two live questions, Ada submits ten right homework answers.
+    for _ in range(5):
+        await room.submit_attempt(ada, [0, 0])
+
+    await game.handlers["next_question"](HOST, {})  # question 2
+    await game.answer("ADA", True)
+    await game.next()
+    assert game_manager.get_by_pin(game.pin) is None
+
+    # Most recent 10: live question 2 and nine homework answers. The early live mistake falls out.
+    fractions = _cell(await room.mastery_report(), ada["id"], "Fractions")
+    assert (fractions["answer_count"], fractions["accuracy"]) == (10, 100)
+
+
 async def test_a_live_answer_records_the_topics_the_question_had_when_the_game_was_hosted(client):
     room = await Classroom.create(client, "t_retag_live", [_question(f"Q{i}", ["Fractions"]) for i in range(1, 4)])
     ada = await room.add_student("Ada", "ADA01")

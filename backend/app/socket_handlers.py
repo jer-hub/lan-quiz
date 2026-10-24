@@ -81,25 +81,24 @@ def register_socket_handlers(sio: socketio.AsyncServer) -> None:
         """
         if session.class_id is None:
             return
-        answers: dict[int, list[GivenAnswer]] = {}
+        game_ended_at = datetime.now(timezone.utc)
         for entry in session.question_history:
+            # Each answer counts as given when its question ended (snapshots from before
+            # this was kept fall back to the end of the game).
+            ended_raw = entry.get("ended_at")
+            answered_at = datetime.fromisoformat(ended_raw) if ended_raw else game_ended_at
             for result in entry.get("results", []):
                 student_id = result.get("student_id")
                 if student_id is None or not result.get("answered"):
                     continue
-                answers.setdefault(student_id, []).append(
-                    GivenAnswer(topics=list(entry.get("topics", [])), correct=bool(result.get("correct")))
+                record_answers(
+                    db,
+                    student_id=student_id,
+                    class_id=session.class_id,
+                    answers=[GivenAnswer(topics=list(entry.get("topics", [])), correct=bool(result.get("correct")))],
+                    answered_at=answered_at,
+                    history_id=history_id,
                 )
-        answered_at = datetime.now(timezone.utc)
-        for student_id, given in answers.items():
-            record_answers(
-                db,
-                student_id=student_id,
-                class_id=session.class_id,
-                answers=given,
-                answered_at=answered_at,
-                history_id=history_id,
-            )
 
     async def run_question_timer(pin: str, time_limit: int) -> None:
         try:

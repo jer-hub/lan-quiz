@@ -753,6 +753,8 @@ class GameManager:
                     "options": list(question.options),
                     "correct_indices": list(question.correct_indices),
                     "topics": list(question.topics),
+                    # When the question closed: its answers count as given at this time (ISO, UTC).
+                    "ended_at": datetime.now(timezone.utc).isoformat(),
                     "results": [
                         {
                             "sid": r["sid"],
