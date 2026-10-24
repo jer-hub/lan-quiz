@@ -18,7 +18,7 @@ Teachers manage quizzes, classes, and assignments. Students join with roster cod
 | **Assignments** | Due dates, close/reopen, max attempts, best/latest score, live PIN, results |
 | **Students** | Portal for assignments/scores; roster-gated join for class games |
 | **Casual mode** | Host any quiz without an assignment (nickname join) |
-| **AI (optional)** | Groq/OpenAI/OpenRouter quiz draft generator; LAN-side PDF/DOCX/TXT/MD extract |
+| **AI (optional)** | Google AI Studio (Gemini), Groq, OpenAI or OpenRouter quiz draft generator; LAN-side PDF/DOCX/TXT/MD extract |
 
 Stack: **FastAPI + Socket.IO + SQLite** · **React + Vite + TypeScript + Tailwind** · **Docker**
 

@@ -11,7 +11,7 @@
 └─────────────┘                            └──────────────────────────┘
          │                                              │
          │  optional (AI generate only)                 │
-         └──────────────► Groq / OpenAI / … ◄───────────┘
+         └──────────────► Gemini / Groq / … ◄───────────┘
 ```
 
 - **One container** serves API, WebSocket, and built frontend.

@@ -26,10 +26,10 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
   const [open, setOpen] = useState(false);
   const [presets, setPresets] = useState<AiPresets | null>(null);
   const [provider, setProvider] = useState(
-    () => localStorage.getItem(LS_PROVIDER) || "groq",
+    () => localStorage.getItem(LS_PROVIDER) || "google",
   );
   const [model, setModel] = useState(
-    () => localStorage.getItem(LS_MODEL) || "qwen/qwen3-32b",
+    () => localStorage.getItem(LS_MODEL) || "gemini-3.8-flash",
   );
   const [apiKey, setApiKey] = useState(() => localStorage.getItem(LS_KEY) || "");
   const [baseUrl, setBaseUrl] = useState(() => localStorage.getItem(LS_BASE) || "");
@@ -121,7 +121,7 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
       return;
     }
     if (!apiKey.trim()) {
-      setError("Paste your API key (free tier keys supported for Groq)");
+      setError("Paste your API key (get a Gemini key from Google AI Studio)");
       return;
     }
     if (provider === "custom" && !baseUrl.trim()) {
@@ -232,7 +232,7 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
             </label>
             <p className="text-xs text-ink/50">
               PDF, DOCX, TXT, or MD — max 5 MB. Extracted on this LAN server; only text is sent to
-              Groq. No OCR for scanned PDFs.
+              the AI provider. No OCR for scanned PDFs.
             </p>
             {extractMeta && (
               <p className="text-xs font-semibold text-ink/70">
@@ -303,7 +303,7 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
                 value={provider}
                 onChange={(e) => setProvider(e.target.value)}
               >
-                {(presets?.providers || [{ id: "groq", label: "Groq (free tier supported)" }]).map(
+                {(presets?.providers || [{ id: "google", label: "Google AI Studio (Gemini)" }]).map(
                   (p) => (
                     <option key={p.id} value={p.id}>
                       {p.label}
@@ -390,8 +390,8 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
             {extracting ? "Extracting…" : busy ? "Generating…" : "Generate quiz draft"}
           </button>
           <p className="text-xs text-ink/50">
-            Review and edit questions below, then Save. Defaults: Groq + qwen/qwen3-32b (alias
-            qwen/qwen3.8-27b) or openai/gpt-oss-120b.
+            Review and edit questions below, then Save. Default: Google AI Studio with
+            gemini-3.8-flash. Groq, OpenAI and OpenRouter are still available.
           </p>
         </div>
       )}

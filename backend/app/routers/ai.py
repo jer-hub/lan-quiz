@@ -26,6 +26,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
+    "google": {
+        "id": "google",
+        "label": "Google AI Studio (Gemini)",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "docs_url": "https://aistudio.google.com/apikey",
+        "models": [
+            {"id": "gemini-3.8-flash", "label": "Gemini 3.8 Flash (default)", "aliases": []},
+            {"id": "gemini-3.5-flash-lite", "label": "Gemini 3.5 Flash-Lite (fast, low cost)", "aliases": []},
+            {"id": "gemini-4-argon", "label": "Gemini 4 Argon (most capable)", "aliases": []},
+        ],
+        "default_model": "gemini-3.8-flash",
+    },
     "groq": {
         "id": "groq",
         "label": "Groq (free tier supported)",
@@ -81,10 +93,13 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
 
 RATE_WARN_THRESHOLD = 5
 
+DEFAULT_PROVIDER = "google"
+DEFAULT_MODEL = PROVIDER_PRESETS[DEFAULT_PROVIDER]["default_model"]
+
 
 class AiGenerateRequest(BaseModel):
-    provider: str = Field(default="groq")
-    model: str = Field(default="qwen/qwen3-32b", min_length=1, max_length=200)
+    provider: str = Field(default=DEFAULT_PROVIDER)
+    model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=200)
     api_key: str = Field(..., min_length=8, max_length=500)
     base_url: str | None = Field(default=None, max_length=500)
     topic: str = Field(default="", max_length=2000)
@@ -380,8 +395,8 @@ def _parse_rate_limit(headers: httpx.Headers) -> RateLimitInfo:
 async def ai_presets(_teacher: User = Depends(require_teacher)) -> dict[str, Any]:
     return {
         "label": "AI Quiz Generator (Free tier supported)",
-        "default_provider": "groq",
-        "default_model": "qwen/qwen3-32b",
+        "default_provider": DEFAULT_PROVIDER,
+        "default_model": DEFAULT_MODEL,
         "providers": list(PROVIDER_PRESETS.values()),
         "note": (
             "Optional cloud feature. Paste your own API key (stored only in this browser). "
@@ -476,6 +491,11 @@ async def generate_quiz(
     # Prefer JSON mode when providers support it
     if provider in ("groq", "openai", "openrouter"):
         body["response_format"] = {"type": "json_object"}
+    if provider == "google":
+        # Gemini 3 models always think, and thinking counts against the output limit:
+        # keep it low and leave room so the quiz JSON is not cut off.
+        body["reasoning_effort"] = "low"
+        body["max_tokens"] = 8192
 
     headers = {
         "Authorization": f"Bearer {api_key}",
