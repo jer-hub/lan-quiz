@@ -18,7 +18,7 @@ Teachers manage quizzes, classes, and assignments. Students join with roster cod
 | **Assignments** | Due dates, close/reopen, max attempts, best/latest score, live PIN, results |
 | **Students** | Portal for assignments/scores; roster-gated join for class games |
 | **Casual mode** | Host any quiz without an assignment (nickname join) |
-| **AI (optional)** | Groq/OpenAI/OpenRouter quiz draft generator; LAN-side PDF/DOCX/TXT/MD extract |
+| **AI (optional)** | Google AI Studio (Gemini) quiz draft generator; PDF and image lesson files sent to Gemini as-is |
 
 Stack: **FastAPI + Socket.IO + SQLite** · **React + Vite + TypeScript + Tailwind** · **Docker**
 
@@ -86,7 +86,7 @@ Details: [docs/CLASSROOM.md](docs/CLASSROOM.md).
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design, data model, Socket.IO flow |
 | [docs/API.md](docs/API.md) | REST + Socket.IO reference |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Local dev, Docker, env vars, troubleshooting |
-| [docs/AI.md](docs/AI.md) | Optional AI quiz generator + file extract |
+| [docs/AI.md](docs/AI.md) | Optional AI quiz generator + lesson files |
 | [samples/README.md](samples/README.md) | Sample quiz JSON format |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 | [SECURITY.md](SECURITY.md) | Secrets, auth, reporting |

@@ -26,7 +26,7 @@ Before opening a PR, verify what you touched:
 - [ ] Teacher register/login works
 - [ ] If gameplay changed: create game → join → answer → end
 - [ ] If assignments changed: host assignment game with student code
-- [ ] If AI changed: presets + generate (with your own key) or extract-text only
+- [ ] If AI changed: presets + generate with your own key, with and without a PDF attached
 
 ## Commit messages
 

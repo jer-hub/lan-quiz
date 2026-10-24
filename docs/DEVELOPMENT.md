@@ -32,7 +32,6 @@ Copy `.env.example` → `.env` at the repo root.
 | `JWT_SECRET` | dev placeholder | **Change for real use** |
 | `JWT_EXPIRE_HOURS` | `72` | Token lifetime |
 | `ALLOW_TEACHER_REGISTRATION` | `false` | Keep `/api/auth/register` open after the first teacher |
-| `ALLOW_PRIVATE_AI_PROVIDERS` | `false` | Let a custom AI provider resolve to loopback/private addresses (e.g. a local model) |
 
 ## Docker (recommended)
 

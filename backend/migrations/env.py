@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from logging.config import fileConfig
@@ -18,8 +19,11 @@ from app.database import Base  # noqa: E402
 import app.models  # noqa: E402,F401
 
 config = context.config
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# Startup runs migrations in-process, after the app has configured logging. Only apply
+# alembic.ini's logging (root level WARN) when run from the command line, so the app's
+# loggers stay enabled and its INFO lines are kept.
+if config.config_file_name is not None and not logging.getLogger().handlers:
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

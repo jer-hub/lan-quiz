@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, setAuthToken } from "../api";
+import { api, setAuthToken, setSessionExpiredHandler } from "../api";
 
 export type AuthRole = "teacher" | "student";
 
@@ -157,6 +157,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setState(empty);
     persist(empty);
   }, []);
+
+  // A rejected session clears the stored login, so the route guards send the user to log in.
+  useEffect(() => {
+    setSessionExpiredHandler(logout);
+    return () => setSessionExpiredHandler(null);
+  }, [logout]);
 
   const value = useMemo<AuthContextValue>(
     () => ({

@@ -350,10 +350,12 @@ export interface AiPresets {
   default_model: string;
   providers: AiProviderPreset[];
   note: string;
-  extract?: {
-    max_upload_bytes: number;
-    max_extract_chars: number;
+  attachments?: {
+    max_bytes: number;
+    mime_types: string[];
     formats: string[];
+    text_formats: string[];
+    max_notes_chars: number;
   };
 }
 
@@ -364,12 +366,11 @@ export interface AiRateLimit {
   retry_after_seconds: number | null;
 }
 
-export interface AiExtractResult {
-  text: string;
-  char_count: number;
-  truncated: boolean;
-  warning: string;
-  filename: string;
+/** A lesson file sent to Gemini as-is (base64), never converted by LanQuiz. */
+export interface AiAttachment {
+  name: string;
+  mime_type: string;
+  data: string;
 }
 
 export interface AiGenerateResult {
@@ -379,6 +380,10 @@ export interface AiGenerateResult {
     questions: Question[];
   };
   rate_limit: AiRateLimit;
+  /** The Gemini model that actually wrote the quiz. */
+  model_used: string;
+  /** True when the chosen model was busy or slow and Flash-Lite was used instead. */
+  fallback_used: boolean;
 }
 
 export const OPTION_COLORS = [
