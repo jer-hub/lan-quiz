@@ -78,6 +78,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Fetches a CSV export as a file to save. */
+async function downloadCsv(url: string): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  const res = await fetch(url, { headers });
+  if (!res.ok) throw new Error("Export failed");
+  return res.blob();
+}
+
 export const api = {
   health: () =>
     request<{ status: string; app: string; public_base_url?: string; host_ip_is_loopback?: boolean }>(
@@ -227,20 +236,8 @@ export const api = {
 
   getGradebook: (classId: number) => request<Gradebook>(`/api/gradebook/${classId}`),
   getMasteryReport: (classId: number) => request<MasteryReport>(`/api/classes/${classId}/mastery`),
-  exportMasteryReport: async (classId: number) => {
-    const headers: Record<string, string> = {};
-    if (authToken) headers.Authorization = `Bearer ${authToken}`;
-    const res = await fetch(`/api/classes/${classId}/mastery/export`, { headers });
-    if (!res.ok) throw new Error("Export failed");
-    return res.blob();
-  },
-  exportGradebook: async (classId: number) => {
-    const headers: Record<string, string> = {};
-    if (authToken) headers.Authorization = `Bearer ${authToken}`;
-    const res = await fetch(`/api/gradebook/${classId}/export`, { headers });
-    if (!res.ok) throw new Error("Export failed");
-    return res.blob();
-  },
+  exportMasteryReport: (classId: number) => downloadCsv(`/api/classes/${classId}/mastery/export`),
+  exportGradebook: (classId: number) => downloadCsv(`/api/gradebook/${classId}/export`),
 
   getAiPresets: () => request<AiPresets>("/api/ai/presets"),
   extractText: (file: File) => {

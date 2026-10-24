@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import MasteryReport from "../components/MasteryReport";
-import { STUDENT_PASSWORD_MIN } from "../shared";
+import { STUDENT_PASSWORD_MIN, saveDownload } from "../shared";
 import type { ClassOut, Gradebook, StudentCreated, StudentOut } from "../shared";
 
 export default function ClassDetailPage() {
@@ -88,22 +88,11 @@ export default function ClassDetailPage() {
       ],
       { type: "text/csv" },
     );
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "roster-template.csv";
-    a.click();
-    URL.revokeObjectURL(url);
+    saveDownload(blob, "roster-template.csv");
   };
 
   const exportCsv = async () => {
-    const blob = await api.exportGradebook(classId);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `gradebook-class-${classId}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    saveDownload(await api.exportGradebook(classId), `gradebook-class-${classId}.csv`);
   };
 
   if (!classroom) {

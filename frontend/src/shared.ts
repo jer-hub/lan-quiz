@@ -394,3 +394,19 @@ export const OPTION_SHAPES = ["▲", "◆", "●", "■", "★", "✦"] as const
 
 /** Minimum length for a supplied student password. Matches the backend (app/roster.py). */
 export const STUDENT_PASSWORD_MIN = 6;
+
+/** Longest topic name. Matches the backend (TOPIC_MAX_LENGTH in app/topics.py). */
+export const TOPIC_MAX_LENGTH = 80;
+
+/** What the mastery report shows for a topic with too few answers. Matches the CSV export (app/mastery.py). */
+export const NOT_ENOUGH_ANSWERS = "not enough answers";
+
+/** Hands a downloaded file to the browser to save under this name. */
+export function saveDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}

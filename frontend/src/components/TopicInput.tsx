@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { TOPIC_MAX_LENGTH } from "../shared";
 
 /** Same rules as the server (app/topics.py): trim, collapse spaces, compare case-insensitively. */
 export function normalizeTopic(name: string): string {
@@ -57,7 +58,7 @@ export default function TopicInput({ id, topics, suggestions, onChange }: Props)
         <input
           id={id}
           list={listId}
-          maxLength={80}
+          maxLength={TOPIC_MAX_LENGTH}
           className="min-w-[10rem] flex-1 rounded-xl border border-sky-200 px-3 py-1.5"
           value={draft}
           placeholder={topics.length ? "Add another topic" : "e.g. Fractions"}

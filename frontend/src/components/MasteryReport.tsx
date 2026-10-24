@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { NOT_ENOUGH_ANSWERS, saveDownload } from "../shared";
 import type { MasteryCell, MasteryReport as Report } from "../shared";
 
 function formatAccuracy(accuracy: number) {
@@ -10,7 +11,7 @@ function Cell({ cell }: { cell: MasteryCell }) {
   if (cell.accuracy == null) {
     return (
       <td className="px-3 py-2 text-xs text-ink/50" title={`${cell.answer_count} answered`}>
-        not enough answers
+        {NOT_ENOUGH_ANSWERS}
       </td>
     );
   }
@@ -96,13 +97,7 @@ function ExportCsvButton({ classId }: { classId: number }) {
   const exportCsv = async () => {
     setError(null);
     try {
-      const blob = await api.exportMasteryReport(classId);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `mastery-class-${classId}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      saveDownload(await api.exportMasteryReport(classId), `mastery-class-${classId}.csv`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Export failed");
     }
