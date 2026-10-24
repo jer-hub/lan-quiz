@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 import random
@@ -10,18 +12,29 @@ import time
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, model_validator
 
 from app.auth import require_teacher
 from app.models import User
 from app.schemas import QuestionCreate, QuizCreate
-from app.text_extract import MAX_EXTRACT_CHARS, MAX_UPLOAD_BYTES, extract_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
-GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+INTERACTIONS_URL = f"{GEMINI_BASE_URL}/interactions"
+
+# Lesson files go to Gemini as-is; LanQuiz does no text conversion. PDFs are read as
+# documents and pictures as images (Gemini's native vision covers scanned pages too).
+ATTACHMENT_KINDS = {
+    "application/pdf": "document",
+    "image/png": "image",
+    "image/jpeg": "image",
+    "image/webp": "image",
+}
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_NOTES_CHARS = 24_000
 
 PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     "google": {
@@ -51,12 +64,19 @@ DEFAULT_PROVIDER = "google"
 DEFAULT_MODEL = PROVIDER_PRESETS[DEFAULT_PROVIDER]["default_model"]
 
 
+class AiAttachment(BaseModel):
+    name: str = Field(default="lesson", max_length=200)
+    mime_type: str = Field(..., max_length=100)
+    data: str = Field(..., min_length=1, max_length=16_000_000)  # base64
+
+
 class AiGenerateRequest(BaseModel):
     provider: str = Field(default=DEFAULT_PROVIDER)
     model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=200)
     api_key: str = Field(..., min_length=8, max_length=500)
     topic: str = Field(default="", max_length=2000)
-    source_material: str | None = Field(default=None, max_length=MAX_EXTRACT_CHARS)
+    source_material: str | None = Field(default=None, max_length=MAX_NOTES_CHARS)
+    attachment: AiAttachment | None = None
     question_count: int = Field(default=8, ge=3, le=20)
     difficulty: str = Field(default="medium", max_length=40)
     language: str = Field(default="English", max_length=60)
@@ -65,8 +85,8 @@ class AiGenerateRequest(BaseModel):
     def require_topic_or_material(self) -> AiGenerateRequest:
         topic = (self.topic or "").strip()
         material = (self.source_material or "").strip()
-        if len(topic) < 3 and len(material) < 20:
-            raise ValueError("Provide a topic (3+ chars) and/or source material (20+ chars)")
+        if len(topic) < 3 and len(material) < 20 and self.attachment is None:
+            raise ValueError("Provide a topic (3+ chars), lesson notes (20+ chars) or a lesson file")
         self.topic = topic
         self.source_material = material or None
         return self
@@ -86,21 +106,14 @@ class AiGenerateResponse(BaseModel):
     fallback_used: bool = False
 
 
-class AiExtractResponse(BaseModel):
-    text: str
-    char_count: int
-    truncated: bool
-    warning: str
-    filename: str
-
-
 def _build_prompt(
     topic: str,
     question_count: int,
     difficulty: str,
     language: str,
     source_material: str | None = None,
-) -> list[dict[str, str]]:
+    attachment_kind: str | None = None,
+) -> tuple[str, str]:
     system = (
         "You are a quiz author for LanQuiz, a classroom Kahoot-style app. "
         "Return ONLY valid JSON (no markdown) matching this schema:\n"
@@ -122,26 +135,28 @@ def _build_prompt(
         "Vary correct_indices across the quiz — do not put the correct option at index 0 "
         "for every question; spread correct answers across different option positions."
     )
-    if source_material:
+    attached = {"document": "the attached document", "image": "the attached image"}.get(
+        attachment_kind or ""
+    )
+    sources = [x for x in (attached, "the lesson notes below" if source_material else None) if x]
+    if sources:
         system += (
-            " When source material is provided, base every question only on that material; "
+            " When lesson material is provided, base every question only on that material; "
             "do not invent facts outside it. Prefer the teacher's topic as quiz focus/title intent."
         )
-        focus = topic if topic else "the provided source material"
+        focus = topic if topic else " and ".join(sources)
         user = (
             f"Create a {difficulty} quiz in {language} focused on: {focus}\n"
-            f"Exactly {question_count} questions.\n\n"
-            f"Source material:\n{source_material}"
+            f"Exactly {question_count} questions. Use only {' and '.join(sources)}."
         )
+        if source_material:
+            user += f"\n\nLesson notes:\n{source_material}"
     else:
         user = (
             f"Create a {difficulty} quiz in {language} about: {topic}\n"
             f"Exactly {question_count} questions."
         )
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
+    return system, user
 
 
 def _extract_json(content: str) -> dict[str, Any]:
@@ -271,17 +286,28 @@ def _parse_rate_limit(headers: httpx.Headers) -> RateLimitInfo:
 
 
 def _provider_reason(resp: httpx.Response, api_key: str) -> str:
-    """Short provider error message for the server log, with the API key removed."""
+    """Provider error message for the server log, with the API key removed.
+
+    Includes Google's field violations, which say which request field was rejected.
+    """
     msg = None
+    violations: list[str] = []
     try:
         err = resp.json()
         if isinstance(err, list) and err:
             err = err[0]
         if isinstance(err, dict):
-            msg = (err.get("error") or {}).get("message")
+            error = err.get("error") or {}
+            msg = error.get("message")
+            for detail in error.get("details") or []:
+                for v in (detail or {}).get("fieldViolations") or []:
+                    violations.append(f"{v.get('field', '?')}: {v.get('description', '')}".strip())
     except Exception:
         msg = None
-    text = str(msg or resp.text or "")[:300]
+    text = str(msg or resp.text or "")
+    if violations:
+        text += " | fields: " + "; ".join(violations)
+    text = text[:600]
     return text.replace(api_key, "[key]") if api_key else text
 
 
@@ -304,60 +330,52 @@ async def ai_presets(_teacher: User = Depends(require_teacher)) -> dict[str, Any
         "providers": list(PROVIDER_PRESETS.values()),
         "note": (
             "Optional cloud feature. Paste your own API key (stored only in this browser). "
-            "Upload PDF/DOCX/TXT/MD to extract text on this LAN server; only text is sent to the AI provider. "
-            "Live LanQuiz games do not require AI."
+            "Attach a PDF or image and it is sent to Google as-is; TXT and Markdown are read into "
+            "the notes box in your browser. Live LanQuiz games do not require AI."
         ),
-        "extract": {
-            "max_upload_bytes": MAX_UPLOAD_BYTES,
-            "max_extract_chars": MAX_EXTRACT_CHARS,
-            "formats": [".pdf", ".docx", ".txt", ".md"],
+        "attachments": {
+            "max_bytes": MAX_ATTACHMENT_BYTES,
+            "mime_types": list(ATTACHMENT_KINDS),
+            "formats": [".pdf", ".png", ".jpg", ".jpeg", ".webp"],
+            "text_formats": [".txt", ".md"],
+            "max_notes_chars": MAX_NOTES_CHARS,
         },
     }
 
 
-@router.post("/extract-text", response_model=AiExtractResponse)
-async def extract_text_endpoint(
-    file: UploadFile = File(...),
-    _teacher: User = Depends(require_teacher),
-) -> AiExtractResponse:
-    filename = file.filename or "upload"
-    # Read with size cap (reject oversized before full buffer if possible)
-    chunks: list[bytes] = []
-    total = 0
-    while True:
-        chunk = await file.read(64 * 1024)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > MAX_UPLOAD_BYTES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"File too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
-            )
-        chunks.append(chunk)
-    data = b"".join(chunks)
-    try:
-        result = extract_text(filename, file.content_type, data)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.warning("Text extract failed filename=%s err=%s", filename[:80], type(exc).__name__)
+def _attachment_item(att: AiAttachment) -> dict[str, str]:
+    """Validate a lesson file and build its Interactions input item. Nothing is converted."""
+    mime = att.mime_type.strip().lower()
+    kind = ATTACHMENT_KINDS.get(mime)
+    if kind is None:
         raise HTTPException(
             status_code=400,
-            detail="Could not extract text from this file",
-        ) from exc
-    finally:
-        data = b""
-        chunks.clear()
-        await file.close()
+            detail="Attach a PDF or an image (PNG, JPEG, WebP). Save Word files as PDF first.",
+        )
+    try:
+        raw = base64.b64decode(att.data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="The attached file could not be read") from exc
+    if not raw:
+        raise HTTPException(status_code=400, detail="The attached file is empty")
+    if len(raw) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"The attached file is too large (max {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB)",
+        )
+    return {"type": kind, "mime_type": mime, "data": att.data}
 
-    return AiExtractResponse(
-        text=result.text,
-        char_count=result.char_count,
-        truncated=result.truncated,
-        warning=result.warning,
-        filename=result.filename,
-    )
+
+def _interaction_text(data: dict[str, Any]) -> str:
+    """The model's final answer: text items of model_output steps only (never thoughts)."""
+    parts: list[str] = []
+    for step in data.get("steps") or []:
+        if not isinstance(step, dict) or step.get("type") != "model_output":
+            continue
+        for item in step.get("content") or []:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text") or ""))
+    return "".join(parts)
 
 
 @router.post("/generate-quiz", response_model=AiGenerateResponse)
@@ -372,27 +390,31 @@ async def generate_quiz(
     api_key = payload.api_key.strip()
 
     material = payload.source_material
-    if material and len(material) > MAX_EXTRACT_CHARS:
-        material = material[:MAX_EXTRACT_CHARS]
+    if material and len(material) > MAX_NOTES_CHARS:
+        material = material[:MAX_NOTES_CHARS]
+    attachment = _attachment_item(payload.attachment) if payload.attachment else None
 
-    url = f"{GEMINI_BASE_URL}/chat/completions"
+    system, user = _build_prompt(
+        payload.topic,
+        payload.question_count,
+        payload.difficulty,
+        payload.language,
+        material,
+        attachment["type"] if attachment else None,
+    )
+    url = INTERACTIONS_URL
     body: dict[str, Any] = {
         "model": model,
-        "messages": _build_prompt(
-            payload.topic,
-            payload.question_count,
-            payload.difficulty,
-            payload.language,
-            material,
-        ),
-        "temperature": 0.4,
+        "system_instruction": system,
+        "input": ([attachment] if attachment else []) + [{"type": "text", "text": user}],
         # Thinking counts against the output limit: keep it low and leave room so the
-        # quiz JSON is not cut off. json_object mode is not documented for this endpoint.
-        "reasoning_effort": "low",
-        "max_tokens": 8192,
+        # quiz JSON is not cut off.
+        "generation_config": {"thinking_level": "low", "max_output_tokens": 8192},
+        # Interactions are stored by Google by default; lesson files should not be.
+        "store": False,
     }
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "x-goog-api-key": api_key,
         "Content-Type": "application/json",
     }
 
@@ -459,12 +481,19 @@ async def generate_quiz(
 
     try:
         data = resp.json()
-        content = data["choices"][0]["message"]["content"]
+        content = _interaction_text(data) if isinstance(data, dict) else ""
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=502, detail="Unexpected AI provider response") from exc
 
-    if not isinstance(content, str) or len(content) > 200_000:
-        raise HTTPException(status_code=502, detail="AI response too large or empty")
+    if not content.strip():
+        status_text = data.get("status") if isinstance(data, dict) else None
+        logger.warning("AI provider returned no draft model=%s status=%s", model_used, status_text)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gemini returned no draft (status: {status_text or 'unknown'}). Try again.",
+        )
+    if len(content) > 200_000:
+        raise HTTPException(status_code=502, detail="AI response too large")
 
     quiz = _validate_quiz(_extract_json(content), payload.question_count)
     # Trim to requested count if model overshot

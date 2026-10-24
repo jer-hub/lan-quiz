@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { AiPresets, AiRateLimit, Question } from "../shared";
+import type { AiAttachment, AiPresets, AiRateLimit, Question } from "../shared";
 
 const PROVIDER = "google";
 const DEFAULT_MODEL = "gemini-3.8-flash";
@@ -18,6 +18,32 @@ const DIFFICULTIES = [
   ["hard", "Hard"],
 ] as const;
 const LANGUAGE_SUGGESTIONS = ["English", "Vietnamese", "Filipino", "Spanish", "French", "Chinese"];
+// PDFs and images go to Gemini as-is. TXT/MD are already text, so the browser just reads
+// them into the notes box. Word files are not readable by Gemini.
+const ATTACH_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/webp"];
+const TEXT_EXTENSIONS = [".txt", ".md"];
+const ACCEPT = ".pdf,.png,.jpg,.jpeg,.webp,.txt,.md,application/pdf,image/png,image/jpeg,image/webp,text/plain,text/markdown";
+const DEFAULT_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+type AttachedFile = AiAttachment & { size: number };
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")} MB`;
+}
+
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || "");
+      resolve(url.slice(url.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(new Error("Could not read that file"));
+    reader.readAsDataURL(file);
+  });
+}
 
 export interface GeneratedQuizPatch {
   title: string;
@@ -73,17 +99,13 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
   const [topic, setTopic] = useState("");
   const [notesOpen, setNotesOpen] = useState(false);
   const [sourceMaterial, setSourceMaterial] = useState("");
-  const [extractWarning, setExtractWarning] = useState<string | null>(null);
-  const [extractMeta, setExtractMeta] = useState<{
-    filename: string;
-    char_count: number;
-    truncated: boolean;
-  } | null>(null);
+  const [attachment, setAttachment] = useState<AttachedFile | null>(null);
+  const [fileNote, setFileNote] = useState<string | null>(null);
   const [questionCount, setQuestionCount] = useState(8);
   const [difficulty, setDifficulty] = useState("medium");
   const [language, setLanguage] = useState("English");
   const [busy, setBusy] = useState(false);
-  const [extracting, setExtracting] = useState(false);
+  const [reading, setReading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [rateLimit, setRateLimit] = useState<AiRateLimit | null>(null);
@@ -104,7 +126,8 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
     [presets],
   );
   const modelOptions = providerMeta?.models || [];
-  const maxChars = presets?.extract?.max_extract_chars ?? 24_000;
+  const maxChars = presets?.attachments?.max_notes_chars ?? 24_000;
+  const maxAttachmentBytes = presets?.attachments?.max_bytes ?? DEFAULT_MAX_ATTACHMENT_BYTES;
   const keyUrl = providerMeta?.docs_url || KEY_URL;
 
   useEffect(() => {
@@ -125,11 +148,11 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
   const topicTrim = topic.trim();
   const materialTrim = sourceMaterial.trim();
   const hasKey = apiKey.trim().length >= 8;
-  const hasContent = topicTrim.length >= 3 || materialTrim.length >= 20;
+  const hasContent = topicTrim.length >= 3 || materialTrim.length >= 20 || attachment !== null;
   const blocker = !hasKey
     ? "Add your Gemini API key in step 1."
     : !hasContent
-      ? "Add a topic (3+ characters) or lesson notes in step 2."
+      ? "Add a topic, lesson notes or a lesson file in step 2."
       : null;
 
   const modelLabel = (id: string) =>
@@ -151,23 +174,36 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
 
   const onFileChange = async (file: File | null) => {
     setNotice(null);
-    setExtractWarning(null);
+    setFileNote(null);
     if (!file) return;
-    setExtracting(true);
+    const lowerName = file.name.toLowerCase();
+    setReading(true);
     try {
-      const result = await api.extractText(file);
-      setSourceMaterial(result.text);
-      setExtractMeta({
-        filename: result.filename,
-        char_count: result.char_count,
-        truncated: result.truncated,
-      });
-      if (result.warning) setExtractWarning(result.warning);
-      else if (result.truncated) setExtractWarning("The text was shortened to fit Gemini's limits.");
+      if (TEXT_EXTENSIONS.some((ext) => lowerName.endsWith(ext)) || file.type.startsWith("text/")) {
+        const text = (await file.text()).slice(0, maxChars);
+        setSourceMaterial(text);
+        setFileNote(`Read ${file.name} into the notes below. Edit before generating if you like.`);
+        return;
+      }
+      if (!ATTACH_TYPES.includes(file.type)) {
+        setNotice({
+          tone: "error",
+          text: "Attach a PDF or an image (PNG, JPEG, WebP). Save Word files as PDF first.",
+        });
+        return;
+      }
+      if (file.size > maxAttachmentBytes) {
+        setNotice({
+          tone: "error",
+          text: `That file is ${formatBytes(file.size)}; the limit is ${formatBytes(maxAttachmentBytes)}.`,
+        });
+        return;
+      }
+      setAttachment({ name: file.name, mime_type: file.type, data: await readAsBase64(file), size: file.size });
     } catch (e) {
       setNotice({ tone: "error", text: e instanceof Error ? e.message : "Could not read that file" });
     } finally {
-      setExtracting(false);
+      setReading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -188,6 +224,7 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
         api_key: apiKey.trim(),
         topic: topicTrim,
         source_material: materialTrim || null,
+        attachment: attachment ? { name: attachment.name, mime_type: attachment.mime_type, data: attachment.data } : null,
         question_count: questionCount,
         difficulty,
         language,
@@ -240,8 +277,8 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
           <span>
             <span className="block font-display text-xl text-ink">Generate with AI</span>
             <span className="block text-sm text-ink/65">
-              Draft questions from a topic or your lesson notes with Google Gemini. Optional — games
-              work without it.
+              Draft questions from a topic, your notes or a lesson file with Google Gemini. Optional —
+              games work without it.
             </span>
           </span>
         </span>
@@ -330,7 +367,7 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
               className="text-sm font-bold text-brand-dark"
               aria-expanded={notesOpen}
             >
-              {notesOpen ? "− Hide lesson notes" : "+ Add lesson notes (optional)"}
+              {notesOpen ? "− Hide lesson material" : "+ Add a lesson file or notes (optional)"}
             </button>
             {notesOpen && (
               <div className="space-y-2 rounded-xl border border-dashed border-sky-300 bg-white/70 p-3">
@@ -338,39 +375,49 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    disabled={extracting || busy}
+                    disabled={reading || busy}
                     className="rounded-lg bg-brand px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
                   >
-                    {extracting ? "Reading file…" : "Upload a file"}
+                    {reading ? "Reading file…" : attachment ? "Replace file" : "Attach a file"}
                   </button>
-                  <span className="text-xs text-ink/55">PDF, DOCX, TXT or MD · max 5 MB · or paste below</span>
+                  <span className="text-xs text-ink/55">
+                    PDF or image · max {formatBytes(maxAttachmentBytes)} · TXT/MD go into the notes
+                  </span>
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".pdf,.docx,.txt,.md,application/pdf,text/plain,text/markdown"
+                    accept={ACCEPT}
                     className="hidden"
                     onChange={(e) => void onFileChange(e.target.files?.[0] ?? null)}
                   />
                 </div>
-                {extractMeta && (
-                  <p className="text-xs font-semibold text-ink/70">
-                    {extractMeta.filename} · {extractMeta.char_count.toLocaleString()} characters
-                    {extractMeta.truncated ? " (shortened)" : ""}
-                  </p>
+                {attachment && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm">
+                    <span className="font-semibold text-ink/80">
+                      {attachment.mime_type === "application/pdf" ? "📄" : "🖼️"} {attachment.name} ·{" "}
+                      {formatBytes(attachment.size)}
+                      <span className="block text-xs font-normal text-ink/55">
+                        Sent to Google as-is, so diagrams and scanned pages are understood too.
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setAttachment(null)}
+                      className="text-sm font-bold text-ink/60 underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
                 )}
-                {extractWarning && <p className="text-xs text-amber-900">{extractWarning}</p>}
+                {fileNote && <p className="text-xs text-ink/65">{fileNote}</p>}
                 <textarea
                   aria-label="Lesson notes"
                   className={`${FIELD} font-mono text-sm`}
                   rows={6}
                   value={sourceMaterial}
                   maxLength={maxChars}
-                  onChange={(e) => {
-                    setSourceMaterial(e.target.value);
-                    setExtractMeta(null);
-                    setExtractWarning(null);
-                  }}
-                  placeholder="Paste lesson notes here, or upload a file above. Questions will stick to these notes."
+                  onChange={(e) => setSourceMaterial(e.target.value)}
+                  placeholder="Optional: paste lesson notes here. Questions will stick to the file and notes."
                 />
                 <p className="text-right text-xs text-ink/50">
                   {sourceMaterial.length.toLocaleString()} / {maxChars.toLocaleString()} characters
@@ -479,7 +526,7 @@ export default function AiQuizGenerator({ onGenerated }: Props) {
           <div className="space-y-2 border-t border-amber-200/70 pt-4">
             <button
               type="button"
-              disabled={busy || extracting || Boolean(blocker)}
+              disabled={busy || reading || Boolean(blocker)}
               onClick={() => void generate()}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 font-extrabold text-ink disabled:cursor-not-allowed disabled:opacity-50"
             >

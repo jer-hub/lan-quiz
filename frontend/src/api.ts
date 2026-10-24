@@ -1,5 +1,5 @@
 import type {
-  AiExtractResult,
+  AiAttachment,
   AiGenerateResult,
   AiPresets,
   Assignment,
@@ -256,20 +256,13 @@ export const api = {
   exportGradebook: (classId: number) => downloadCsv(`/api/gradebook/${classId}/export`),
 
   getAiPresets: () => request<AiPresets>("/api/ai/presets"),
-  extractText: (file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    return request<AiExtractResult>("/api/ai/extract-text", {
-      method: "POST",
-      body: form,
-    });
-  },
   generateQuiz: (body: {
     provider: string;
     model: string;
     api_key: string;
     topic: string;
     source_material?: string | null;
+    attachment?: AiAttachment | null;
     question_count: number;
     difficulty: string;
     language: string;

@@ -118,9 +118,8 @@ In both CSV exports (gradebook and mastery report), a text cell starting with `=
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/ai/presets` | Google AI Studio models + extract limits |
-| POST | `/api/ai/extract-text` | Multipart `file` → text (PDF/DOCX/TXT/MD, max 5 MB) |
-| POST | `/api/ai/generate-quiz` | JSON: `model`, `api_key`, topic / `source_material`, … (provider is always `google`) |
+| GET | `/api/ai/presets` | Google AI Studio models + lesson file limits |
+| POST | `/api/ai/generate-quiz` | JSON: `model`, `api_key`, topic / `source_material`, optional `attachment` {`name`, `mime_type`, base64 `data`} (PDF or PNG/JPEG/WebP, max 10 MB, sent to Gemini as-is) |
 
 API keys are **not** stored server-side. See [AI.md](AI.md).
 
