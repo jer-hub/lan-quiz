@@ -6,6 +6,8 @@ whether it was correct at that moment (ADR 0001). The report reads only those re
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -130,3 +132,24 @@ async def build_mastery_report(db: AsyncSession, classroom: ClassRoom) -> Master
         rows=rows,
         untagged_answer_count=untagged,
     )
+
+
+NOT_ENOUGH_ANSWERS = "not enough answers"
+
+
+def _csv_cell(cell: MasteryCell) -> str:
+    """A cell as the report shows it: the accuracy, marked when mastered, or "not enough answers"."""
+    if cell.accuracy is None:
+        return NOT_ENOUGH_ANSWERS
+    accuracy = f"{cell.accuracy:g}%"
+    return f"{accuracy} mastered" if cell.mastered else accuracy
+
+
+def mastery_report_csv(report: MasteryReportOut) -> str:
+    """The mastery report as CSV: one row per student, one column per topic."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["student_code", "display_name", *report.topics])
+    for row in report.rows:
+        writer.writerow([row.student_code, row.display_name, *(_csv_cell(c) for c in row.cells)])
+    return buf.getvalue()

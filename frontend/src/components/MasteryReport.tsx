@@ -89,6 +89,39 @@ function ThresholdSetting({
   );
 }
 
+/** Downloads the mastery report as CSV: one row per student, one column per topic. */
+function ExportCsvButton({ classId }: { classId: number }) {
+  const [error, setError] = useState<string | null>(null);
+
+  const exportCsv = async () => {
+    setError(null);
+    try {
+      const blob = await api.exportMasteryReport(classId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `mastery-class-${classId}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Export failed");
+    }
+  };
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-3">
+      <button
+        type="button"
+        onClick={() => void exportCsv()}
+        className="rounded-xl bg-accent px-4 py-2 font-extrabold text-ink"
+      >
+        Export CSV
+      </button>
+      {error && <span className="text-sm text-danger">{error}</span>}
+    </div>
+  );
+}
+
 /** The class's mastery report: each student's accuracy on each topic, mastered topics marked. */
 export default function MasteryReport({ classId }: { classId: number }) {
   const [report, setReport] = useState<Report | null>(null);
@@ -166,6 +199,7 @@ export default function MasteryReport({ classId }: { classId: number }) {
         {report.untagged_answer_count} answer{report.untagged_answer_count === 1 ? " was" : "s were"} on
         questions without topics and {report.untagged_answer_count === 1 ? "is" : "are"} not in this report.
       </p>
+      <ExportCsvButton classId={classId} />
     </div>
   );
 }
