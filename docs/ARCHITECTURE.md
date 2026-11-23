@@ -11,7 +11,7 @@
 └─────────────┘                            └──────────────────────────┘
          │                                              │
          │  optional (AI generate only)                 │
-         └──────────────► Groq / OpenAI / … ◄───────────┘
+         └──────────────► Google Gemini API ◄───────────┘
 ```
 
 - **One container** serves API, WebSocket, and built frontend.
@@ -28,7 +28,6 @@
 | ORM | `backend/app/models.py` | Users, quizzes, classes, students, assignments, history |
 | Auth | `backend/app/auth.py` | bcrypt passwords, JWT create/verify |
 | AI proxy | `backend/app/routers/ai.py` | Teacher-only; browser API key → provider |
-| Text extract | `backend/app/text_extract.py` | PDF/DOCX/TXT/MD → text (no persistence) |
 | Frontend | `frontend/src/` | React Router SPA |
 
 ## Data model (simplified)

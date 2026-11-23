@@ -2,93 +2,81 @@
 
 from __future__ import annotations
 
-import asyncio
-import ipaddress
+import base64
+import binascii
 import json
 import logging
 import random
 import re
-import socket
+import time
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, model_validator
 
 from app.auth import require_teacher
-from app.config import settings
 from app.models import User
 from app.schemas import QuestionCreate, QuizCreate
-from app.text_extract import MAX_EXTRACT_CHARS, MAX_UPLOAD_BYTES, extract_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+INTERACTIONS_URL = f"{GEMINI_BASE_URL}/interactions"
+
+# Lesson files go to Gemini as-is; LanQuiz does no text conversion. PDFs are read as
+# documents and pictures as images (Gemini's native vision covers scanned pages too).
+ATTACHMENT_KINDS = {
+    "application/pdf": "document",
+    "image/png": "image",
+    "image/jpeg": "image",
+    "image/webp": "image",
+}
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_NOTES_CHARS = 24_000
+
 PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
-    "groq": {
-        "id": "groq",
-        "label": "Groq (free tier supported)",
-        "base_url": "https://api.groq.com/openai/v1",
-        "docs_url": "https://console.groq.com/keys",
+    "google": {
+        "id": "google",
+        "label": "Google AI Studio (Gemini)",
+        "base_url": GEMINI_BASE_URL,
+        "docs_url": "https://aistudio.google.com/apikey",
         "models": [
-            {
-                "id": "qwen/qwen3-32b",
-                "label": "Qwen3 32B (default)",
-                "aliases": ["qwen/qwen3.8-27b"],
-            },
-            {
-                "id": "openai/gpt-oss-120b",
-                "label": "GPT-OSS 120B",
-                "aliases": [],
-            },
-            {"id": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B", "aliases": []},
-            {"id": "llama-3.1-8b-instant", "label": "Llama 3.1 8B Instant", "aliases": []},
+            {"id": "gemini-3.8-flash", "label": "Gemini 3.8 Flash (default)", "aliases": []},
+            {"id": "gemini-3.5-flash-lite", "label": "Gemini 3.5 Flash-Lite (fast, low cost)", "aliases": []},
+            {"id": "gemini-4-argon", "label": "Gemini 4 Argon (most capable)", "aliases": []},
         ],
-        "default_model": "qwen/qwen3-32b",
-    },
-    "openai": {
-        "id": "openai",
-        "label": "OpenAI",
-        "base_url": "https://api.openai.com/v1",
-        "docs_url": "https://platform.openai.com/api-keys",
-        "models": [
-            {"id": "gpt-4o-mini", "label": "GPT-4o mini", "aliases": []},
-            {"id": "gpt-4o", "label": "GPT-4o", "aliases": []},
-        ],
-        "default_model": "gpt-4o-mini",
-    },
-    "openrouter": {
-        "id": "openrouter",
-        "label": "OpenRouter",
-        "base_url": "https://openrouter.ai/api/v1",
-        "docs_url": "https://openrouter.ai/keys",
-        "models": [
-            {"id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "aliases": []},
-            {"id": "qwen/qwen3-32b", "label": "Qwen3 32B", "aliases": ["qwen/qwen3.8-27b"]},
-        ],
-        "default_model": "qwen/qwen3-32b",
-    },
-    "custom": {
-        "id": "custom",
-        "label": "Custom (OpenAI-compatible)",
-        "base_url": "",
-        "docs_url": "",
-        "models": [],
-        "default_model": "",
+        "default_model": "gemini-3.8-flash",
     },
 }
 
+# A healthy quiz generation takes about 4-18 s. A model under heavy demand can answer 503
+# or hold the request without replying, so each attempt is capped and a busy or slow
+# model falls back once to Flash-Lite.
+PROVIDER_TIMEOUT = httpx.Timeout(45.0, connect=10.0)
+FALLBACK_MODEL = "gemini-3.5-flash-lite"
+BUSY_MESSAGE = "Gemini is busy right now (high demand). Please try again in a minute."
+
 RATE_WARN_THRESHOLD = 5
+
+DEFAULT_PROVIDER = "google"
+DEFAULT_MODEL = PROVIDER_PRESETS[DEFAULT_PROVIDER]["default_model"]
+
+
+class AiAttachment(BaseModel):
+    name: str = Field(default="lesson", max_length=200)
+    mime_type: str = Field(..., max_length=100)
+    data: str = Field(..., min_length=1, max_length=16_000_000)  # base64
 
 
 class AiGenerateRequest(BaseModel):
-    provider: str = Field(default="groq")
-    model: str = Field(default="qwen/qwen3-32b", min_length=1, max_length=200)
+    provider: str = Field(default=DEFAULT_PROVIDER)
+    model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=200)
     api_key: str = Field(..., min_length=8, max_length=500)
-    base_url: str | None = Field(default=None, max_length=500)
     topic: str = Field(default="", max_length=2000)
-    source_material: str | None = Field(default=None, max_length=MAX_EXTRACT_CHARS)
+    source_material: str | None = Field(default=None, max_length=MAX_NOTES_CHARS)
+    attachment: AiAttachment | None = None
     question_count: int = Field(default=8, ge=3, le=20)
     difficulty: str = Field(default="medium", max_length=40)
     language: str = Field(default="English", max_length=60)
@@ -97,8 +85,8 @@ class AiGenerateRequest(BaseModel):
     def require_topic_or_material(self) -> AiGenerateRequest:
         topic = (self.topic or "").strip()
         material = (self.source_material or "").strip()
-        if len(topic) < 3 and len(material) < 20:
-            raise ValueError("Provide a topic (3+ chars) and/or source material (20+ chars)")
+        if len(topic) < 3 and len(material) < 20 and self.attachment is None:
+            raise ValueError("Provide a topic (3+ chars), lesson notes (20+ chars) or a lesson file")
         self.topic = topic
         self.source_material = material or None
         return self
@@ -114,90 +102,8 @@ class RateLimitInfo(BaseModel):
 class AiGenerateResponse(BaseModel):
     quiz: QuizCreate
     rate_limit: RateLimitInfo
-
-
-class AiExtractResponse(BaseModel):
-    text: str
-    char_count: int
-    truncated: bool
-    warning: str
-    filename: str
-
-
-def _resolve_base_url(provider: str, base_url: str | None) -> str:
-    key = provider.strip().lower()
-    if key == "custom":
-        url = (base_url or "").strip().rstrip("/")
-        if not url:
-            raise HTTPException(status_code=400, detail="Custom provider requires a base_url")
-        return url
-    preset = PROVIDER_PRESETS.get(key)
-    if not preset:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
-    return (base_url or preset["base_url"]).strip().rstrip("/")
-
-
-def _is_internal_address(raw: str) -> bool:
-    ip = ipaddress.ip_address(raw.split("%", 1)[0])
-    # Treat ::ffff:127.0.0.1 style addresses as the IPv4 address they wrap.
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_unspecified
-
-
-async def _check_provider_url(base_url: str) -> tuple[str, str]:
-    """Refuse non-https or internal targets, then pin the connection to a checked address.
-
-    The host is resolved once. Every returned address must be public. The returned
-    URL uses the first checked IP, so the connection cannot be rebound to another
-    address. The hostname is returned separately for TLS (SNI and certificate check)
-    and the Host header.
-    """
-    parts = urlsplit(base_url)
-    if parts.scheme.lower() != "https":
-        raise HTTPException(status_code=400, detail="AI provider URL must use https")
-    host = parts.hostname
-    if not host:
-        raise HTTPException(status_code=400, detail="AI provider URL must include a host")
-    if settings.allow_private_ai_providers:
-        return base_url, host
-    try:
-        infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise HTTPException(status_code=400, detail="Could not resolve AI provider host") from exc
-    addresses: list[str] = []
-    for info in infos:
-        address = info[4][0]
-        if _is_internal_address(address):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "AI provider URL must not point to a private or loopback address "
-                    "(set ALLOW_PRIVATE_AI_PROVIDERS=true to allow a local model)"
-                ),
-            )
-        addresses.append(address)
-    if not addresses:
-        raise HTTPException(status_code=400, detail="Could not resolve AI provider host")
-    ip = addresses[0]
-    netloc = f"[{ip}]" if ":" in ip else ip
-    if parts.port is not None:
-        netloc += f":{parts.port}"
-    pinned = urlunsplit((parts.scheme, netloc, parts.path, parts.query, ""))
-    return pinned.rstrip("/"), host
-
-
-def _normalize_model(provider: str, model: str) -> str:
-    m = model.strip()
-    # Map planned alias to current Groq ID
-    if m == "qwen/qwen3.8-27b":
-        return "qwen/qwen3-32b"
-    preset = PROVIDER_PRESETS.get(provider.strip().lower())
-    if preset:
-        for item in preset.get("models") or []:
-            if m in (item.get("aliases") or []):
-                return item["id"]
-    return m
+    model_used: str
+    fallback_used: bool = False
 
 
 def _build_prompt(
@@ -206,7 +112,8 @@ def _build_prompt(
     difficulty: str,
     language: str,
     source_material: str | None = None,
-) -> list[dict[str, str]]:
+    attachment_kind: str | None = None,
+) -> tuple[str, str]:
     system = (
         "You are a quiz author for LanQuiz, a classroom Kahoot-style app. "
         "Return ONLY valid JSON (no markdown) matching this schema:\n"
@@ -228,26 +135,28 @@ def _build_prompt(
         "Vary correct_indices across the quiz — do not put the correct option at index 0 "
         "for every question; spread correct answers across different option positions."
     )
-    if source_material:
+    attached = {"document": "the attached document", "image": "the attached image"}.get(
+        attachment_kind or ""
+    )
+    sources = [x for x in (attached, "the lesson notes below" if source_material else None) if x]
+    if sources:
         system += (
-            " When source material is provided, base every question only on that material; "
+            " When lesson material is provided, base every question only on that material; "
             "do not invent facts outside it. Prefer the teacher's topic as quiz focus/title intent."
         )
-        focus = topic if topic else "the provided source material"
+        focus = topic if topic else " and ".join(sources)
         user = (
             f"Create a {difficulty} quiz in {language} focused on: {focus}\n"
-            f"Exactly {question_count} questions.\n\n"
-            f"Source material:\n{source_material}"
+            f"Exactly {question_count} questions. Use only {' and '.join(sources)}."
         )
+        if source_material:
+            user += f"\n\nLesson notes:\n{source_material}"
     else:
         user = (
             f"Create a {difficulty} quiz in {language} about: {topic}\n"
             f"Exactly {question_count} questions."
         )
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
+    return system, user
 
 
 def _extract_json(content: str) -> dict[str, Any]:
@@ -376,69 +285,97 @@ def _parse_rate_limit(headers: httpx.Headers) -> RateLimitInfo:
     )
 
 
+def _provider_reason(resp: httpx.Response, api_key: str) -> str:
+    """Provider error message for the server log, with the API key removed.
+
+    Includes Google's field violations, which say which request field was rejected.
+    """
+    msg = None
+    violations: list[str] = []
+    try:
+        err = resp.json()
+        if isinstance(err, list) and err:
+            err = err[0]
+        if isinstance(err, dict):
+            error = err.get("error") or {}
+            msg = error.get("message")
+            for detail in error.get("details") or []:
+                for v in (detail or {}).get("fieldViolations") or []:
+                    violations.append(f"{v.get('field', '?')}: {v.get('description', '')}".strip())
+    except Exception:
+        msg = None
+    text = str(msg or resp.text or "")
+    if violations:
+        text += " | fields: " + "; ".join(violations)
+    text = text[:600]
+    return text.replace(api_key, "[key]") if api_key else text
+
+
+def _provider_error_hint(status_code: int) -> str:
+    if status_code in (401, 403):
+        return "Google AI Studio rejected the API key. Check the key and that the Gemini API is enabled."
+    if status_code == 404:
+        return "Google AI Studio does not recognise this model. Pick another model."
+    if status_code == 400:
+        return "Google AI Studio rejected the request (HTTP 400). Check the API key and model."
+    return f"AI provider returned an error (HTTP {status_code})"
+
+
 @router.get("/presets")
 async def ai_presets(_teacher: User = Depends(require_teacher)) -> dict[str, Any]:
     return {
-        "label": "AI Quiz Generator (Free tier supported)",
-        "default_provider": "groq",
-        "default_model": "qwen/qwen3-32b",
+        "label": "AI Quiz Generator (Google AI Studio)",
+        "default_provider": DEFAULT_PROVIDER,
+        "default_model": DEFAULT_MODEL,
         "providers": list(PROVIDER_PRESETS.values()),
         "note": (
             "Optional cloud feature. Paste your own API key (stored only in this browser). "
-            "Upload PDF/DOCX/TXT/MD to extract text on this LAN server; only text is sent to the AI provider. "
-            "Live LanQuiz games do not require AI."
+            "Attach a PDF or image and it is sent to Google as-is; TXT and Markdown are read into "
+            "the notes box in your browser. Live LanQuiz games do not require AI."
         ),
-        "extract": {
-            "max_upload_bytes": MAX_UPLOAD_BYTES,
-            "max_extract_chars": MAX_EXTRACT_CHARS,
-            "formats": [".pdf", ".docx", ".txt", ".md"],
+        "attachments": {
+            "max_bytes": MAX_ATTACHMENT_BYTES,
+            "mime_types": list(ATTACHMENT_KINDS),
+            "formats": [".pdf", ".png", ".jpg", ".jpeg", ".webp"],
+            "text_formats": [".txt", ".md"],
+            "max_notes_chars": MAX_NOTES_CHARS,
         },
     }
 
 
-@router.post("/extract-text", response_model=AiExtractResponse)
-async def extract_text_endpoint(
-    file: UploadFile = File(...),
-    _teacher: User = Depends(require_teacher),
-) -> AiExtractResponse:
-    filename = file.filename or "upload"
-    # Read with size cap (reject oversized before full buffer if possible)
-    chunks: list[bytes] = []
-    total = 0
-    while True:
-        chunk = await file.read(64 * 1024)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > MAX_UPLOAD_BYTES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"File too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
-            )
-        chunks.append(chunk)
-    data = b"".join(chunks)
-    try:
-        result = extract_text(filename, file.content_type, data)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.warning("Text extract failed filename=%s err=%s", filename[:80], type(exc).__name__)
+def _attachment_item(att: AiAttachment) -> dict[str, str]:
+    """Validate a lesson file and build its Interactions input item. Nothing is converted."""
+    mime = att.mime_type.strip().lower()
+    kind = ATTACHMENT_KINDS.get(mime)
+    if kind is None:
         raise HTTPException(
             status_code=400,
-            detail="Could not extract text from this file",
-        ) from exc
-    finally:
-        data = b""
-        chunks.clear()
-        await file.close()
+            detail="Attach a PDF or an image (PNG, JPEG, WebP). Save Word files as PDF first.",
+        )
+    try:
+        raw = base64.b64decode(att.data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="The attached file could not be read") from exc
+    if not raw:
+        raise HTTPException(status_code=400, detail="The attached file is empty")
+    if len(raw) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"The attached file is too large (max {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB)",
+        )
+    return {"type": kind, "mime_type": mime, "data": att.data}
 
-    return AiExtractResponse(
-        text=result.text,
-        char_count=result.char_count,
-        truncated=result.truncated,
-        warning=result.warning,
-        filename=result.filename,
-    )
+
+def _interaction_text(data: dict[str, Any]) -> str:
+    """The model's final answer: text items of model_output steps only (never thoughts)."""
+    parts: list[str] = []
+    for step in data.get("steps") or []:
+        if not isinstance(step, dict) or step.get("type") != "model_output":
+            continue
+        for item in step.get("content") or []:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text") or ""))
+    return "".join(parts)
 
 
 @router.post("/generate-quiz", response_model=AiGenerateResponse)
@@ -447,62 +384,80 @@ async def generate_quiz(
     _teacher: User = Depends(require_teacher),
 ) -> AiGenerateResponse:
     provider = payload.provider.strip().lower()
-    model = _normalize_model(provider, payload.model)
-    base_url = _resolve_base_url(provider, payload.base_url)
-    # Presets are fixed https hosts; check them only when the teacher overrides the URL.
-    # Pinned to the checked address; TLS and Host still use the hostname.
-    tls_host: str | None = None
-    if provider == "custom" or (payload.base_url or "").strip():
-        base_url, tls_host = await _check_provider_url(base_url)
+    if provider not in PROVIDER_PRESETS:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {payload.provider}")
+    model = payload.model.strip()
     api_key = payload.api_key.strip()
 
     material = payload.source_material
-    if material and len(material) > MAX_EXTRACT_CHARS:
-        material = material[:MAX_EXTRACT_CHARS]
+    if material and len(material) > MAX_NOTES_CHARS:
+        material = material[:MAX_NOTES_CHARS]
+    attachment = _attachment_item(payload.attachment) if payload.attachment else None
 
-    url = f"{base_url}/chat/completions"
+    system, user = _build_prompt(
+        payload.topic,
+        payload.question_count,
+        payload.difficulty,
+        payload.language,
+        material,
+        attachment["type"] if attachment else None,
+    )
+    url = INTERACTIONS_URL
     body: dict[str, Any] = {
         "model": model,
-        "messages": _build_prompt(
-            payload.topic,
-            payload.question_count,
-            payload.difficulty,
-            payload.language,
-            material,
-        ),
-        "temperature": 0.4,
-        "max_tokens": 4096,
+        "system_instruction": system,
+        "input": ([attachment] if attachment else []) + [{"type": "text", "text": user}],
+        # Thinking counts against the output limit: keep it low and leave room so the
+        # quiz JSON is not cut off.
+        "generation_config": {"thinking_level": "low", "max_output_tokens": 8192},
+        # Interactions are stored by Google by default; lesson files should not be.
+        "store": False,
     }
-    # Prefer JSON mode when providers support it
-    if provider in ("groq", "openai", "openrouter"):
-        body["response_format"] = {"type": "json_object"}
-
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "x-goog-api-key": api_key,
         "Content-Type": "application/json",
     }
-    if provider == "openrouter":
-        headers["HTTP-Referer"] = "https://lanquiz.local"
-        headers["X-Title"] = "LanQuiz"
-    extensions: dict[str, Any] = {}
-    if tls_host:
-        headers["Host"] = tls_host
-        extensions["sni_hostname"] = tls_host
 
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, headers=headers, json=body, extensions=extensions)
-    except httpx.TimeoutException as exc:
-        raise HTTPException(status_code=504, detail="AI provider timed out") from exc
-    except httpx.RequestError as exc:
-        logger.warning("AI provider request failed: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail="Could not reach AI provider. Check internet access on the LanQuiz host.",
-        ) from exc
-    finally:
-        # Ensure key is not kept beyond this request path
-        api_key = ""
+    # The chosen model first; if it is busy (503) or does not answer in time, Flash-Lite once.
+    attempts = [model] if model == FALLBACK_MODEL else [model, FALLBACK_MODEL]
+    resp: httpx.Response | None = None
+    model_used = model
+    started = time.monotonic()
+    for attempt_model in attempts:
+        attempt_body = {**body, "model": attempt_model}
+        model_used = attempt_model
+        started = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=PROVIDER_TIMEOUT) as client:
+                resp = await client.post(url, headers=headers, json=attempt_body)
+        except httpx.TimeoutException as exc:
+            logger.warning(
+                "AI provider timed out model=%s after=%.1fs (%s)",
+                attempt_model,
+                time.monotonic() - started,
+                type(exc).__name__,
+            )
+            resp = None
+            continue
+        except httpx.RequestError as exc:
+            logger.warning("AI provider request failed model=%s: %s", attempt_model, type(exc).__name__)
+            raise HTTPException(
+                status_code=502,
+                detail="Could not reach AI provider. Check internet access on the LanQuiz host.",
+            ) from exc
+        if resp.status_code == 503:
+            logger.warning(
+                "AI provider busy status=503 model=%s after=%.1fs reason=%s",
+                attempt_model,
+                time.monotonic() - started,
+                _provider_reason(resp, api_key),
+            )
+            resp = None
+            continue
+        break
+    if resp is None:
+        raise HTTPException(status_code=503, detail=BUSY_MESSAGE)
+    elapsed = time.monotonic() - started
 
     rate = _parse_rate_limit(resp.headers)
 
@@ -514,21 +469,31 @@ async def generate_quiz(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail)
 
     if resp.status_code >= 400:
-        # Provider bodies are not echoed: they can carry key fragments or internal details.
-        logger.warning("AI provider returned status=%s", resp.status_code)
-        raise HTTPException(
-            status_code=502,
-            detail=f"AI provider returned an error (HTTP {resp.status_code})",
+        # The provider's own message goes to the server log only, with the key removed.
+        logger.warning(
+            "AI provider returned status=%s model=%s after=%.1fs reason=%s",
+            resp.status_code,
+            model_used,
+            elapsed,
+            _provider_reason(resp, api_key),
         )
+        raise HTTPException(status_code=502, detail=_provider_error_hint(resp.status_code))
 
     try:
         data = resp.json()
-        content = data["choices"][0]["message"]["content"]
+        content = _interaction_text(data) if isinstance(data, dict) else ""
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=502, detail="Unexpected AI provider response") from exc
 
-    if not isinstance(content, str) or len(content) > 200_000:
-        raise HTTPException(status_code=502, detail="AI response too large or empty")
+    if not content.strip():
+        status_text = data.get("status") if isinstance(data, dict) else None
+        logger.warning("AI provider returned no draft model=%s status=%s", model_used, status_text)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gemini returned no draft (status: {status_text or 'unknown'}). Try again.",
+        )
+    if len(content) > 200_000:
+        raise HTTPException(status_code=502, detail="AI response too large")
 
     quiz = _validate_quiz(_extract_json(content), payload.question_count)
     # Trim to requested count if model overshot
@@ -539,11 +504,18 @@ async def generate_quiz(
             questions=quiz.questions[: payload.question_count],
         )
 
+    api_key = ""
     logger.info(
-        "AI quiz generated provider=%s model=%s questions=%s warning=%s",
-        provider,
-        model,
+        "AI quiz generated model=%s fallback=%s questions=%s after=%.1fs warning=%s",
+        model_used,
+        model_used != model,
         len(quiz.questions),
+        elapsed,
         rate.warning,
     )
-    return AiGenerateResponse(quiz=quiz, rate_limit=rate)
+    return AiGenerateResponse(
+        quiz=quiz,
+        rate_limit=rate,
+        model_used=model_used,
+        fallback_used=model_used != model,
+    )

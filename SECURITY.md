@@ -30,4 +30,4 @@ If you find a security-sensitive bug (auth bypass, data leak across teachers/cla
 
 - Quiz and classroom data live in `./data/lanquiz.db` on the host.
 - Treat that file as sensitive (student names, codes, scores).
-- Uploaded AI lesson files are not persisted; extracted text is sent only to the configured AI provider during generate.
+- AI lesson files are not persisted by LanQuiz. An attached PDF or image is sent in full to Google (Gemini) during generate, with `store: false`.
